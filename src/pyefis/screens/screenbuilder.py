@@ -32,6 +32,7 @@ from pyefis.instruments import button
 from pyefis.instruments import misc
 from pyefis.instruments.ai.VirtualVfr import VirtualVfr
 from pyefis.instruments import listbox
+from pyefis.instruments.gauges.newEGTCHT_Combo import newEGTCHT_Combo
 
 import pyavtools.fix as fix
 import pyavtools.scheduler as scheduler
@@ -503,6 +504,8 @@ class Screen(QWidget):
             self.instruments[count] = gauges.VerticalBar(self,min_size=False,font_family=font_family)
         elif i['type'] == 'virtual_vfr':
             self.instruments[count] = VirtualVfr(self,font_percent=font_percent,font_family=font_family)
+        elif i['type'] == 'newEGTCHT_Combo':
+            self.instruments[count] = newEGTCHT_Combo(i['options'], self)
 
         elif i['type'] == 'listbox':
             self.instruments[count] = listbox.ListBox(self, lists=i['options']['lists'], replace=replace,font_family=font_family) #,font_percent=font_percent)

@@ -20,3 +20,4 @@ from .verticalBar import VerticalBar
 from .arc import ArcGauge
 from .numeric import NumericDisplay
 from .egt import EGTGroup
+from .EGTCHT_Combo import EGTCHT_Combo

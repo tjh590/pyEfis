@@ -1,0 +1,18 @@
+instruments:
+  - type: EGTCHT_Combo
+    rows: 4
+    cols: 2
+    gappct: 0.05
+    headpct: 0.1
+    EGT:
+      minlimit: 1000
+      warnlimit: 1300
+      maxlimit: 1600
+      maxextendpct: 0.1
+      dbkeys: [EGT1, EGT2, EGT3, EGT4]
+    CHT:
+      minlimit: 300
+      warnlimit: 400
+      maxlimit: 500
+      maxextendpct: 0.1
+      dbkeys: [CHT1, CHT2, CHT3, CHT4]

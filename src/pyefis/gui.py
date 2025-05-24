@@ -185,6 +185,23 @@ class Main(QMainWindow):
         else:
             return None
 
+    def handleButtonInput(self, button):
+        if button == "PFD":
+            self.showScreen("PFD")
+        elif button == "EMS":
+            self.showScreen("EMS")
+        elif button == "EMS2":
+            self.showScreen("EMS2")
+        elif button == "ANDROID":
+            self.showScreen("ANDROID")
+        elif button == "RADIO":
+            self.showScreen("RADIO")
+        elif button == "SIXPACK":
+            self.showScreen("SIXPACK")
+
+    def handleScreenChange(self, screen):
+        self.showScreen(screen)
+
 def setDefaultScreen(s):
     found = False
     if type(s) == int:

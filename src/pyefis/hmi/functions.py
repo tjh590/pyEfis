@@ -40,3 +40,19 @@ def toggleBool(arg):
     bit = fix.db.get_item(arg)
     bit.value = not bit.value
     bit.output_value()
+
+
+def handleButtonInput(button):
+    if button == "PFD":
+        fix.db.get_item("SCREEN").value = "PFD"
+    elif button == "EMS":
+        fix.db.get_item("SCREEN").value = "EMS"
+    elif button == "EMS2":
+        fix.db.get_item("SCREEN").value = "EMS2"
+    elif button == "ANDROID":
+        fix.db.get_item("SCREEN").value = "ANDROID"
+    elif button == "RADIO":
+        fix.db.get_item("SCREEN").value = "RADIO"
+    elif button == "SIXPACK":
+        fix.db.get_item("SCREEN").value = "SIXPACK"
+    fix.db.get_item("SCREEN").output_value()

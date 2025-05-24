@@ -198,4 +198,6 @@ EMS:
           instruments:
             -
               preferences: BAR27
-
+    - type: include,buttons/screen-ems-pfd.yaml
+      row: 0
+      column: 0

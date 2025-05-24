@@ -239,6 +239,10 @@ def main():
         hmi.keys.initialize(gui.mainWindow, config["keybindings"])
     hooks.initialize(config['hooks'])
 
+    # Initialize button input handling and screen changes
+    gui.mainWindow.buttonInput.connect(gui.mainWindow.handleButtonInput)
+    gui.mainWindow.screenChange.connect(gui.mainWindow.handleScreenChange)
+
     # Main program loop
     result = app.exec()
 

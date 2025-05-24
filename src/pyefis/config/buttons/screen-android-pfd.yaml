@@ -24,7 +24,8 @@ conditions:
   - when: "CLICKED eq true and SCREEN ne 'ANDROID'" 
     actions:
       - show screen: ANDROID
+      - set value: HIDEBUTTON,False
   - when: "CLICKED eq true and SCREEN eq 'ANDROID'"
     actions:
       - show screen: PFD
-
+      - set value: HIDEBUTTON,False

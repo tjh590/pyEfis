@@ -48,4 +48,18 @@ PFD:
       display_state: 2
       replace:
         radio_id: 1
-
+    - type: include,buttons/screen-ems-pfd.yaml
+      row: 0
+      column: 0
+    - type: include,buttons/screen-ems2-pfd.yaml
+      row: 0
+      column: 0
+    - type: include,buttons/screen-android-pfd.yaml
+      row: 0
+      column: 0
+    - type: include,buttons/screen-radio-pfd.yaml
+      row: 0
+      column: 0
+    - type: include,buttons/screen-sixpack-pfd.yaml
+      row: 0
+      column: 0

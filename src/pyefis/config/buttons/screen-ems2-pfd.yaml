@@ -43,4 +43,3 @@ conditions:
     actions:
       - show screen: PFD
       - set value: HIDEBUTTON,False
-

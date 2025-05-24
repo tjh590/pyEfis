@@ -36,4 +36,3 @@ instruments:
             options:
               config: buttons/units.yaml
               encoder_order: 100016
-

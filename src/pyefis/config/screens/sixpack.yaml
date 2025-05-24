@@ -82,3 +82,6 @@ SIXPACK:
       options:
         dbkey: MAVMSG
         font_percent: 0.9
+    - type: include,buttons/screen-sixpack-pfd.yaml
+      row: 0
+      column: 0

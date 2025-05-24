@@ -61,6 +61,6 @@ RADIO:
       span:
         rows: 30
         columns: 200
-
-
-
+    - type: include,buttons/screen-radio-pfd.yaml
+      row: 0
+      column: 0

@@ -78,4 +78,6 @@ ANDROID:
       display_state: 2
       replace:
         radio_id: 1
-
+    - type: include,buttons/screen-android-pfd.yaml
+      row: 0
+      column: 0

@@ -34,6 +34,7 @@ class ActionClass(QWidget):
     setMenuFocus = pyqtSignal(object)
     setInstUnits = pyqtSignal(object)
     doExit = pyqtSignal(object)
+    buttonInput = pyqtSignal(object)  # Pa5f6
     # arg = <inst name>,<inst name>,<inst name>,..:<Command>
 
     def __init__(self):
@@ -54,6 +55,7 @@ class ActionClass(QWidget):
             "set instrument units": self.setInstUnits,
             "exit": self.doExit,
             "evaluate": eval,
+            "button input": self.buttonInput,  # P5f6f
         }
 
     def trigger(self, action, argument=""):

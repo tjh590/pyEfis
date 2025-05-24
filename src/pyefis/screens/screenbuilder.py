@@ -977,3 +977,91 @@ class GridOverlay(QWidget):
             painter.drawLine(qRound(grid_x), qRound(grid_y), self.width(),  qRound(grid_y))
             y += 5
 
+# Configuring the Application Without Using Screen Builder
+# 
+# If you prefer not to use the screen builder, you can configure the application using alternative methods. Here are some examples:
+# 
+# Direct Configuration
+# 
+# You can directly configure the application by editing the configuration files. This method requires you to manually specify the layout and settings for each screen and instrument.
+# 
+# Example:
+# 
+# screens:
+#   PFD:
+#     module: pyefis.screens.pfd
+#     title: Primary Flight Display
+#     layout:
+#       columns: 300
+#       rows: 200
+#     instruments:
+#       - type: airspeed_dial
+#         row: 0
+#         column: 0
+#         span:
+#           rows: 100
+#           columns: 100
+#       - type: altimeter_dial
+#         row: 0
+#         column: 100
+#         span:
+#           rows: 100
+#           columns: 100
+# 
+# Using Predefined Layouts
+# 
+# You can use predefined layouts provided by the application. These layouts are designed to work with specific screen sizes and resolutions.
+# 
+# Example:
+# 
+# screens:
+#   PFD:
+#     module: pyefis.screens.pfd
+#     title: Primary Flight Display
+#     layout: predefined_layouts/pfd_layout.yaml
+# 
+# Custom Scripts
+# 
+# You can create custom scripts to generate the configuration files. This method allows you to automate the configuration process and make it easier to manage multiple screens and instruments.
+# 
+# Example:
+# 
+# import yaml
+# 
+# config = {
+#     'screens': {
+#         'PFD': {
+#             'module': 'pyefis.screens.pfd',
+#             'title': 'Primary Flight Display',
+#             'layout': {
+#                 'columns': 300,
+#                 'rows': 200
+#             },
+#             'instruments': [
+#                 {
+#                     'type': 'airspeed_dial',
+#                     'row': 0,
+#                     'column': 0,
+#                     'span': {
+#                         'rows': 100,
+#                         'columns': 100
+#                     }
+#                 },
+#                 {
+#                     'type': 'altimeter_dial',
+#                     'row': 0,
+#                     'column': 100,
+#                     'span': {
+#                         'rows': 100,
+#                         'columns': 100
+#                     }
+#                 }
+#             ]
+#         }
+#     }
+# }
+# 
+# with open('config.yaml', 'w') as file:
+#     yaml.dump(config, file)
+# 
+# These alternative methods provide flexibility in configuring the application without using the screen builder. Choose the method that best suits your needs and preferences.

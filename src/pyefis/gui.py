@@ -185,6 +185,10 @@ class Main(QMainWindow):
         else:
             return None
 
+    def handle_alternative_configuration(self, config):
+        # Add your custom logic here to handle alternative configuration methods
+        pass
+
 def setDefaultScreen(s):
     found = False
     if type(s) == int:

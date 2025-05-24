@@ -503,6 +503,8 @@ class Screen(QWidget):
             self.instruments[count] = gauges.VerticalBar(self,min_size=False,font_family=font_family)
         elif i['type'] == 'virtual_vfr':
             self.instruments[count] = VirtualVfr(self,font_percent=font_percent,font_family=font_family)
+        elif i['type'] == 'historic_lineplot':
+            self.instruments[count] = gauges.HistoricLinePlot(i['options'], self)
 
         elif i['type'] == 'listbox':
             self.instruments[count] = listbox.ListBox(self, lists=i['options']['lists'], replace=replace,font_family=font_family) #,font_percent=font_percent)

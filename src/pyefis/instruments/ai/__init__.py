@@ -294,6 +294,14 @@ class AI(QGraphicsView):
 
 # We use the paintEvent to draw on the viewport the parts that aren't moving.
     def paintEvent(self, event):
+        # Diagnostics: measure paint cost for AI-based instruments
+        try:
+            from pyefis.diagnostics.overlay import GaugeDiagnostics
+            _diag = GaugeDiagnostics.get()
+        except Exception:
+            _diag = None
+        _timer = QElapsedTimer()
+        _timer.start()
         super(AI, self).paintEvent(event)
         w = self.width()
         h = self.height()
@@ -356,6 +364,9 @@ class AI(QGraphicsView):
             p.drawPolygon(diamond)
             p.rotate(-2 * a)
             p.drawPolygon(diamond)
+        # Record paint duration
+        if _diag is not None:
+            _diag.record(self.__class__.__name__, _timer.nsecsElapsed())
 
     # We don't want this responding to keystrokes
     def keyPressEvent(self, event):

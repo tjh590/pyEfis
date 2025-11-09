@@ -143,7 +143,7 @@ class AbstractGauge(QWidget):
         # Phase 2: repaint throttling and delta suppression
         # Settings (can be overridden via YAML binding on gauges)
         self.throttle_enabled = True            # enable coalesced repaint scheduling
-        self.max_fps = 60                       # cap paints per gauge per second
+        self.max_fps = 10                       # cap paints per gauge per second
         self.delta_threshold_abs = 0.0          # absolute change needed to repaint (0 disables)
         self.delta_threshold_rel = 0.0          # relative change needed (0 disables)
         self._last_painted_value = None         # last value that was actually painted

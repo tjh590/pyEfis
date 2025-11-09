@@ -62,6 +62,8 @@ class VirtualVfr(AI):
         self._VFROld = dict()
         self._VFRBad = dict()
         self._VFRFail = dict()
+        # Track whether FIX signal connections already made to avoid duplicates on repeated resizes
+        self._connections_made = False
         for p in ['LAT', 'HEAD', 'ALT', 'LONG']:
             self._VFROld[p] = True
             self._VFRBad[p] = True
@@ -158,31 +160,35 @@ class VirtualVfr(AI):
 
 
         log.info(f"Attempting to load {dbpath}")
-        self.pov = PointOfView(dbpath,
-                               indexpath,
-                               self.myparent.get_config_item('refresh_period'))
+        # Only construct POV once; subsequent resizes re-initialize rather than recreate
+        if self.pov is None:
+            self.pov = PointOfView(dbpath,
+                                   indexpath,
+                                   self.myparent.get_config_item('refresh_period'))
         self.pov.initialize(["Runway", "Airport"], self.scene.width(),
                     self.lng, self.lat, self.altitude, self.true_heading)
 
         self.setHeading(self.head_item.value)
 
-        # Must happen here to prevent race
-        self.lng_item.valueChanged[float].connect(self.setLongitude)
-        self.lng_item.badChanged[bool].connect(self.setLngBad)
-        self.lng_item.oldChanged[bool].connect(self.setLngOld)
-        self.lng_item.failChanged[bool].connect(self.setLngFail)
-        self.lat_item.valueChanged[float].connect(self.setLatitude)
-        self.lat_item.badChanged[bool].connect(self.setLatBad)
-        self.lat_item.oldChanged[bool].connect(self.setLatOld)
-        self.lat_item.failChanged[bool].connect(self.setLatFail)
-        self.head_item.valueChanged[float].connect(self.setHeading)
-        self.head_item.badChanged[bool].connect(self.setHeadBad)
-        self.head_item.oldChanged[bool].connect(self.setHeadOld)
-        self.head_item.failChanged[bool].connect(self.setHeadFail)
-        self.alt_item.valueChanged[float].connect(self.setAltitude)
-        self.alt_item.badChanged[bool].connect(self.setAltBad)
-        self.alt_item.oldChanged[bool].connect(self.setAltOld)
-        self.alt_item.failChanged[bool].connect(self.setAltFail)
+        # Must happen here to prevent race; connect only once
+        if not self._connections_made:
+            self.lng_item.valueChanged[float].connect(self.setLongitude)
+            self.lng_item.badChanged[bool].connect(self.setLngBad)
+            self.lng_item.oldChanged[bool].connect(self.setLngOld)
+            self.lng_item.failChanged[bool].connect(self.setLngFail)
+            self.lat_item.valueChanged[float].connect(self.setLatitude)
+            self.lat_item.badChanged[bool].connect(self.setLatBad)
+            self.lat_item.oldChanged[bool].connect(self.setLatOld)
+            self.lat_item.failChanged[bool].connect(self.setLatFail)
+            self.head_item.valueChanged[float].connect(self.setHeading)
+            self.head_item.badChanged[bool].connect(self.setHeadBad)
+            self.head_item.oldChanged[bool].connect(self.setHeadOld)
+            self.head_item.failChanged[bool].connect(self.setHeadFail)
+            self.alt_item.valueChanged[float].connect(self.setAltitude)
+            self.alt_item.badChanged[bool].connect(self.setAltBad)
+            self.alt_item.oldChanged[bool].connect(self.setAltOld)
+            self.alt_item.failChanged[bool].connect(self.setAltFail)
+            self._connections_made = True
 
         if not self.rendering_prohibited():
             self.pov.render(self)
@@ -415,17 +421,26 @@ class VirtualVfr(AI):
                 pls = int(self.width() * 0.008)
                 rect = QRectF (QPointF(- pls,- pls), QPointF(pls,pls))
                 pen,bsh = (rpen,rbsh) if papi_redcount > 0 else (wpen,wbsh)
-                light = self.scene.addEllipse (rect, pen, bsh)
-                light.setX(x)
-                light.setY(y)
                 if len(lights) < i+1:
+                    light = self.scene.addEllipse (rect, pen, bsh)
                     lights.append(light)
                 else:
-                    self.scene.removeItem (lights[i])
-                    lights[i] = light
+                    light = lights[i]
+                    # Update existing geometry & style
+                    try:
+                        light.setRect(rect)
+                        light.setPen(pen)
+                        light.setBrush(bsh)
+                    except Exception:
+                        # Fallback recreate if underlying object changed type
+                        self.scene.removeItem(light)
+                        light = self.scene.addEllipse(rect, pen, bsh)
+                        lights[i] = light
+                light.setX(x)
+                light.setY(y)
                 x += VirtualVfr.PAPI_LIGHT_SPACING
                 papi_redcount -= 1
-                self.display_objects[pkey] = lights
+            self.display_objects[pkey] = lights
         else:
             if elkey in self.display_objects:
                 self.scene.removeItem (self.display_objects[elkey])
@@ -538,8 +553,10 @@ class VirtualVfr(AI):
         #print ("New latitude %f"%self.lat)
         self.pov.update_position (self.lat, self.lng)
         if not self.rendering_prohibited():
+            need_update = self.pov.do_render
             self.pov.render(self)
-            self.update()
+            if need_update and self.isVisible():
+                self.update()
 
     def setLongitude(self, lng):
         self.lng = lng
@@ -547,22 +564,28 @@ class VirtualVfr(AI):
         #print ("New longitude %f"%self.lng)
         self.pov.update_position (self.lat, self.lng)
         if not self.rendering_prohibited():
+            need_update = self.pov.do_render
             self.pov.render(self)
-            self.update()
+            if need_update and self.isVisible():
+                self.update()
 
     def setAltitude(self, alt):
         self.altitude = alt
         self.pov.update_altitude (alt)
         self.pov.update_position (self.lat, self.lng)
         if not self.rendering_prohibited():
+            need_update = self.pov.do_render
             self.pov.render(self)
-            self.update()
+            if need_update and self.isVisible():
+                self.update()
     def setHeading(self, heading):
         self.pov.update_heading (heading)
         if not self.rendering_prohibited():
             #log.debug("Rendering")
+            need_update = self.pov.do_render
             self.pov.render(self)
-            self.update()
+            if need_update and self.isVisible():
+                self.update()
 
     def getVfrBad(self):
         #print(self._VFRBad)

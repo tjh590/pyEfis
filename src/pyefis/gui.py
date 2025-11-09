@@ -286,6 +286,43 @@ def initialize(config, config_path, preferences):
         menu = hmi.menu.Menu(mainWindow, config["menu"])
         menu.start()
 
+    # Diagnostics overlay & publisher (Phase 2 integration)
+    try:
+        def _pref_flag(name: str, default: bool):
+            try:
+                if name in preferences:
+                    return bool(preferences.get(name))
+                return bool(preferences.get('enabled', {}).get(name, default))
+            except Exception:
+                return default
+        diag_enabled = _pref_flag('DIAGNOSTICS_OVERLAY', True)
+        publish_enabled = _pref_flag('DIAGNOSTICS_PUBLISH', True)
+        overlay_log_enabled = _pref_flag('DIAGNOSTICS_OVERLAY_LOG', False)
+        publish_log_enabled = _pref_flag('DIAGNOSTICS_PUBLISH_LOG', False)
+        from pyefis.diagnostics.overlay import DiagnosticsOverlay, FixGwDiagnosticsPublisher, OverlayDiagnosticsLogger
+        if diag_enabled:
+            overlay = DiagnosticsOverlay(mainWindow)
+            overlay.setObjectName("DiagnosticsOverlay")
+            overlay.setGeometry(0, 0, mainWindow.width(), mainWindow.height())
+            overlay.show()
+            def _sync_overlay():
+                parent = overlay.parentWidget() or mainWindow
+                overlay.setGeometry(0, 0, parent.width(), parent.height())
+            mainWindow.windowShow.connect(lambda e: _sync_overlay())
+            # Wrap existing resizeEvent safely
+            _orig_resize = getattr(mainWindow, 'resizeEvent', None)
+            def _wrapped_resize(ev):
+                if callable(_orig_resize):
+                    _orig_resize(ev)
+                _sync_overlay()
+            setattr(mainWindow, 'resizeEvent', _wrapped_resize)
+        if publish_enabled or publish_log_enabled:
+            FixGwDiagnosticsPublisher(enabled=publish_enabled, key_prefix="DIAG_", parent=mainWindow, log_enabled=publish_log_enabled)
+        if overlay_log_enabled:
+            OverlayDiagnosticsLogger(enabled=True, parent=mainWindow)
+    except Exception as e:
+        log.debug(f"Diagnostics overlay/publisher init failed: {e}")
+
     if 'FMS' in config:
         sys.path.insert(0, config["FMS"]["module_dir"])
         ui = importlib.import_module("qtui")
@@ -302,8 +339,9 @@ def initialize(config, config_path, preferences):
         log.debug("Setting Screen to Full Size")
         mainWindow.showFullScreen()
     else:
-        mainWindow.width = int(config["main"]["screenWidth"])
-        mainWindow.height = int(config["main"]["screenHeight"])
+        w = int(config["main"]["screenWidth"])
+        h = int(config["main"]["screenHeight"])
+        mainWindow.resize(w, h)
         mainWindow.show()
 
 

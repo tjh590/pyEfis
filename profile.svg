@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="394" onload="init(evt)" viewBox="0 0 1200 394" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = true;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="394" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">py-spy record -o profile.svg --duration 10 --pid 4939</text><text id="details" fill="rgb(0,0,0)" x="10" y="40.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="383.00"> </text><svg id="frames" x="10" width="1180" total_samples="986"><g><title>dataChanged (pyefis/instruments/button/__init__.py:139) (2 samples, 0.20%)</title><rect x="10.2434%" y="116" width="0.2028%" height="15" fill="rgb(227,0,7)" fg:x="101" fg:w="2"/><text x="10.4934%" y="126.50"></text></g><g><title>debug (logging/__init__.py:1467) (2 samples, 0.20%)</title><rect x="10.2434%" y="132" width="0.2028%" height="15" fill="rgb(217,0,24)" fg:x="101" fg:w="2"/><text x="10.4934%" y="142.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:243) (2 samples, 0.20%)</title><rect x="10.5477%" y="132" width="0.2028%" height="15" fill="rgb(221,193,54)" fg:x="104" fg:w="2"/><text x="10.7977%" y="142.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:245) (1 samples, 0.10%)</title><rect x="10.7505%" y="132" width="0.1014%" height="15" fill="rgb(248,212,6)" fg:x="106" fg:w="1"/><text x="11.0005%" y="142.50"></text></g><g><title>to_struct (pycond.py:964) (2 samples, 0.20%)</title><rect x="11.0548%" y="148" width="0.2028%" height="15" fill="rgb(208,68,35)" fg:x="109" fg:w="2"/><text x="11.3048%" y="158.50"></text></g><g><title>to_struct (pycond.py:970) (2 samples, 0.20%)</title><rect x="11.2576%" y="148" width="0.2028%" height="15" fill="rgb(232,128,0)" fg:x="111" fg:w="2"/><text x="11.5076%" y="158.50"></text></g><g><title>to_struct (pycond.py:972) (1 samples, 0.10%)</title><rect x="11.4604%" y="148" width="0.1014%" height="15" fill="rgb(207,160,47)" fg:x="113" fg:w="1"/><text x="11.7104%" y="158.50"></text></g><g><title>tokenize (pycond.py:884) (2 samples, 0.20%)</title><rect x="11.5619%" y="148" width="0.2028%" height="15" fill="rgb(228,23,34)" fg:x="114" fg:w="2"/><text x="11.8119%" y="158.50"></text></g><g><title>tokenize (pycond.py:886) (3 samples, 0.30%)</title><rect x="11.7647%" y="148" width="0.3043%" height="15" fill="rgb(218,30,26)" fg:x="116" fg:w="3"/><text x="12.0147%" y="158.50"></text></g><g><title>tokenize (pycond.py:887) (3 samples, 0.30%)</title><rect x="12.0690%" y="148" width="0.3043%" height="15" fill="rgb(220,122,19)" fg:x="119" fg:w="3"/><text x="12.3190%" y="158.50"></text></g><g><title>tokenize (pycond.py:890) (4 samples, 0.41%)</title><rect x="12.3732%" y="148" width="0.4057%" height="15" fill="rgb(250,228,42)" fg:x="122" fg:w="4"/><text x="12.6232%" y="158.50"></text></g><g><title>&lt;listcomp&gt; (pycond.py:890) (4 samples, 0.41%)</title><rect x="12.3732%" y="164" width="0.4057%" height="15" fill="rgb(240,193,28)" fg:x="122" fg:w="4"/><text x="12.6232%" y="174.50"></text></g><g><title>tokenize (pycond.py:892) (1 samples, 0.10%)</title><rect x="12.7789%" y="148" width="0.1014%" height="15" fill="rgb(216,20,37)" fg:x="126" fg:w="1"/><text x="13.0289%" y="158.50"></text></g><g><title>tokenize (pycond.py:893) (9 samples, 0.91%)</title><rect x="12.8803%" y="148" width="0.9128%" height="15" fill="rgb(206,188,39)" fg:x="127" fg:w="9"/><text x="13.1303%" y="158.50"></text></g><g><title>tokenize (pycond.py:895) (6 samples, 0.61%)</title><rect x="13.7931%" y="148" width="0.6085%" height="15" fill="rgb(217,207,13)" fg:x="136" fg:w="6"/><text x="14.0431%" y="158.50"></text></g><g><title>tokenize (pycond.py:896) (8 samples, 0.81%)</title><rect x="14.4016%" y="148" width="0.8114%" height="15" fill="rgb(231,73,38)" fg:x="142" fg:w="8"/><text x="14.6516%" y="158.50"></text></g><g><title>tokenize (pycond.py:899) (1 samples, 0.10%)</title><rect x="15.2130%" y="148" width="0.1014%" height="15" fill="rgb(225,20,46)" fg:x="150" fg:w="1"/><text x="15.4630%" y="158.50"></text></g><g><title>tokenize (pycond.py:901) (1 samples, 0.10%)</title><rect x="15.3144%" y="148" width="0.1014%" height="15" fill="rgb(210,31,41)" fg:x="151" fg:w="1"/><text x="15.5644%" y="158.50"></text></g><g><title>tokenize (pycond.py:905) (1 samples, 0.10%)</title><rect x="15.4158%" y="148" width="0.1014%" height="15" fill="rgb(221,200,47)" fg:x="152" fg:w="1"/><text x="15.6658%" y="158.50"></text></g><g><title>tokenize (pycond.py:909) (1 samples, 0.10%)</title><rect x="15.5172%" y="148" width="0.1014%" height="15" fill="rgb(226,26,5)" fg:x="153" fg:w="1"/><text x="15.7672%" y="158.50"></text></g><g><title>tokenize (pycond.py:913) (1 samples, 0.10%)</title><rect x="15.6187%" y="148" width="0.1014%" height="15" fill="rgb(249,33,26)" fg:x="154" fg:w="1"/><text x="15.8687%" y="158.50"></text></g><g><title>tokenize (pycond.py:922) (1 samples, 0.10%)</title><rect x="15.7201%" y="148" width="0.1014%" height="15" fill="rgb(235,183,28)" fg:x="155" fg:w="1"/><text x="15.9701%" y="158.50"></text></g><g><title>tokenize (pycond.py:928) (2 samples, 0.20%)</title><rect x="15.8215%" y="148" width="0.2028%" height="15" fill="rgb(221,5,38)" fg:x="156" fg:w="2"/><text x="16.0715%" y="158.50"></text></g><g><title>tokenize (pycond.py:929) (7 samples, 0.71%)</title><rect x="16.0243%" y="148" width="0.7099%" height="15" fill="rgb(247,18,42)" fg:x="158" fg:w="7"/><text x="16.2743%" y="158.50"></text></g><g><title>tokenize (pycond.py:933) (1 samples, 0.10%)</title><rect x="16.7343%" y="148" width="0.1014%" height="15" fill="rgb(241,131,45)" fg:x="165" fg:w="1"/><text x="16.9843%" y="158.50"></text></g><g><title>tokenize (pycond.py:938) (1 samples, 0.10%)</title><rect x="16.8357%" y="148" width="0.1014%" height="15" fill="rgb(249,31,29)" fg:x="166" fg:w="1"/><text x="17.0857%" y="158.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:246) (61 samples, 6.19%)</title><rect x="10.8519%" y="132" width="6.1866%" height="15" fill="rgb(225,111,53)" fg:x="107" fg:w="61"/><text x="11.1019%" y="142.50">processC..</text></g><g><title>tokenize (pycond.py:946) (1 samples, 0.10%)</title><rect x="16.9371%" y="148" width="0.1014%" height="15" fill="rgb(238,160,17)" fg:x="167" fg:w="1"/><text x="17.1871%" y="158.50"></text></g><g><title>_comb (pycond.py:362) (2 samples, 0.20%)</title><rect x="17.2414%" y="148" width="0.2028%" height="15" fill="rgb(214,148,48)" fg:x="170" fg:w="2"/><text x="17.4914%" y="158.50"></text></g><g><title>f_atomic (pycond.py:591) (1 samples, 0.10%)</title><rect x="17.3428%" y="164" width="0.1014%" height="15" fill="rgb(232,36,49)" fg:x="171" fg:w="1"/><text x="17.5928%" y="174.50"></text></g><g><title>state_get (pycond.py:226) (1 samples, 0.10%)</title><rect x="17.3428%" y="180" width="0.1014%" height="15" fill="rgb(209,103,24)" fg:x="171" fg:w="1"/><text x="17.5928%" y="190.50"></text></g><g><title>_comb (pycond.py:371) (1 samples, 0.10%)</title><rect x="17.4442%" y="148" width="0.1014%" height="15" fill="rgb(229,88,8)" fg:x="172" fg:w="1"/><text x="17.6942%" y="158.50"></text></g><g><title>_comb (pycond.py:373) (1 samples, 0.10%)</title><rect x="17.4442%" y="164" width="0.1014%" height="15" fill="rgb(213,181,19)" fg:x="172" fg:w="1"/><text x="17.6942%" y="174.50"></text></g><g><title>_comb (pycond.py:373) (1 samples, 0.10%)</title><rect x="17.4442%" y="180" width="0.1014%" height="15" fill="rgb(254,191,54)" fg:x="172" fg:w="1"/><text x="17.6942%" y="190.50"></text></g><g><title>_comb (pycond.py:373) (1 samples, 0.10%)</title><rect x="17.4442%" y="196" width="0.1014%" height="15" fill="rgb(241,83,37)" fg:x="172" fg:w="1"/><text x="17.6942%" y="206.50"></text></g><g><title>_comb (pycond.py:373) (1 samples, 0.10%)</title><rect x="17.4442%" y="212" width="0.1014%" height="15" fill="rgb(233,36,39)" fg:x="172" fg:w="1"/><text x="17.6942%" y="222.50"></text></g><g><title>_comb (pycond.py:362) (1 samples, 0.10%)</title><rect x="17.4442%" y="228" width="0.1014%" height="15" fill="rgb(226,3,54)" fg:x="172" fg:w="1"/><text x="17.6942%" y="238.50"></text></g><g><title>f_atomic (pycond.py:591) (1 samples, 0.10%)</title><rect x="17.4442%" y="244" width="0.1014%" height="15" fill="rgb(245,192,40)" fg:x="172" fg:w="1"/><text x="17.6942%" y="254.50"></text></g><g><title>state_get (pycond.py:226) (1 samples, 0.10%)</title><rect x="17.4442%" y="260" width="0.1014%" height="15" fill="rgb(238,167,29)" fg:x="172" fg:w="1"/><text x="17.6942%" y="270.50"></text></g><g><title>pycond (pycond.py:832) (1 samples, 0.10%)</title><rect x="17.5456%" y="148" width="0.1014%" height="15" fill="rgb(232,182,51)" fg:x="173" fg:w="1"/><text x="17.7956%" y="158.50"></text></g><g><title>parse_cond (pycond.py:769) (1 samples, 0.10%)</title><rect x="17.9513%" y="164" width="0.1014%" height="15" fill="rgb(231,60,39)" fg:x="177" fg:w="1"/><text x="18.2013%" y="174.50"></text></g><g><title>is_str (pycond.py:53) (1 samples, 0.10%)</title><rect x="17.9513%" y="180" width="0.1014%" height="15" fill="rgb(208,69,12)" fg:x="177" fg:w="1"/><text x="18.2013%" y="190.50"></text></g><g><title>parse_cond (pycond.py:782) (1 samples, 0.10%)</title><rect x="18.0527%" y="164" width="0.1014%" height="15" fill="rgb(235,93,37)" fg:x="178" fg:w="1"/><text x="18.3027%" y="174.50"></text></g><g><title>_signature_from_callable (inspect.py:2446) (1 samples, 0.10%)</title><rect x="18.7627%" y="228" width="0.1014%" height="15" fill="rgb(213,116,39)" fg:x="185" fg:w="1"/><text x="19.0127%" y="238.50"></text></g><g><title>unwrap (inspect.py:761) (1 samples, 0.10%)</title><rect x="18.8641%" y="244" width="0.1014%" height="15" fill="rgb(222,207,29)" fg:x="186" fg:w="1"/><text x="19.1141%" y="254.50"></text></g><g><title>_signature_from_callable (inspect.py:2463) (2 samples, 0.20%)</title><rect x="18.8641%" y="228" width="0.2028%" height="15" fill="rgb(206,96,30)" fg:x="186" fg:w="2"/><text x="19.1141%" y="238.50"></text></g><g><title>unwrap (inspect.py:762) (1 samples, 0.10%)</title><rect x="18.9655%" y="244" width="0.1014%" height="15" fill="rgb(218,138,4)" fg:x="187" fg:w="1"/><text x="19.2155%" y="254.50"></text></g><g><title>_is_wrapper (inspect.py:756) (1 samples, 0.10%)</title><rect x="18.9655%" y="260" width="0.1014%" height="15" fill="rgb(250,191,14)" fg:x="187" fg:w="1"/><text x="19.2155%" y="270.50"></text></g><g><title>_signature_from_callable (inspect.py:2472) (2 samples, 0.20%)</title><rect x="19.0669%" y="228" width="0.2028%" height="15" fill="rgb(239,60,40)" fg:x="188" fg:w="2"/><text x="19.3169%" y="238.50"></text></g><g><title>_signature_from_callable (inspect.py:2473) (1 samples, 0.10%)</title><rect x="19.2698%" y="228" width="0.1014%" height="15" fill="rgb(206,27,48)" fg:x="190" fg:w="1"/><text x="19.5198%" y="238.50"></text></g><g><title>_signature_from_callable (inspect.py:2484) (5 samples, 0.51%)</title><rect x="19.3712%" y="228" width="0.5071%" height="15" fill="rgb(225,35,8)" fg:x="191" fg:w="5"/><text x="19.6212%" y="238.50"></text></g><g><title>_signature_from_callable (inspect.py:2511) (1 samples, 0.10%)</title><rect x="19.8783%" y="228" width="0.1014%" height="15" fill="rgb(250,213,24)" fg:x="196" fg:w="1"/><text x="20.1283%" y="238.50"></text></g><g><title>_signature_from_function (inspect.py:2336) (1 samples, 0.10%)</title><rect x="20.3854%" y="244" width="0.1014%" height="15" fill="rgb(247,123,22)" fg:x="201" fg:w="1"/><text x="20.6354%" y="254.50"></text></g><g><title>_signature_from_function (inspect.py:2351) (2 samples, 0.20%)</title><rect x="20.4868%" y="244" width="0.2028%" height="15" fill="rgb(231,138,38)" fg:x="202" fg:w="2"/><text x="20.7368%" y="254.50"></text></g><g><title>_signature_from_function (inspect.py:2352) (1 samples, 0.10%)</title><rect x="20.6897%" y="244" width="0.1014%" height="15" fill="rgb(231,145,46)" fg:x="204" fg:w="1"/><text x="20.9397%" y="254.50"></text></g><g><title>_signature_from_function (inspect.py:2355) (1 samples, 0.10%)</title><rect x="20.7911%" y="244" width="0.1014%" height="15" fill="rgb(251,118,11)" fg:x="205" fg:w="1"/><text x="21.0411%" y="254.50"></text></g><g><title>get_annotations (inspect.py:212) (1 samples, 0.10%)</title><rect x="20.8925%" y="260" width="0.1014%" height="15" fill="rgb(217,147,25)" fg:x="206" fg:w="1"/><text x="21.1425%" y="270.50"></text></g><g><title>get_annotations (inspect.py:230) (1 samples, 0.10%)</title><rect x="20.9939%" y="260" width="0.1014%" height="15" fill="rgb(247,81,37)" fg:x="207" fg:w="1"/><text x="21.2439%" y="270.50"></text></g><g><title>get_annotations (inspect.py:236) (1 samples, 0.10%)</title><rect x="21.0953%" y="260" width="0.1014%" height="15" fill="rgb(209,12,38)" fg:x="208" fg:w="1"/><text x="21.3453%" y="270.50"></text></g><g><title>get_annotations (inspect.py:240) (1 samples, 0.10%)</title><rect x="21.1968%" y="260" width="0.1014%" height="15" fill="rgb(227,1,9)" fg:x="209" fg:w="1"/><text x="21.4468%" y="270.50"></text></g><g><title>_signature_from_function (inspect.py:2358) (5 samples, 0.51%)</title><rect x="20.8925%" y="244" width="0.5071%" height="15" fill="rgb(248,47,43)" fg:x="206" fg:w="5"/><text x="21.1425%" y="254.50"></text></g><g><title>get_annotations (inspect.py:241) (1 samples, 0.10%)</title><rect x="21.2982%" y="260" width="0.1014%" height="15" fill="rgb(221,10,30)" fg:x="210" fg:w="1"/><text x="21.5482%" y="270.50"></text></g><g><title>_signature_from_function (inspect.py:2359) (1 samples, 0.10%)</title><rect x="21.3996%" y="244" width="0.1014%" height="15" fill="rgb(210,229,1)" fg:x="211" fg:w="1"/><text x="21.6496%" y="254.50"></text></g><g><title>_signature_from_function (inspect.py:2362) (1 samples, 0.10%)</title><rect x="21.5010%" y="244" width="0.1014%" height="15" fill="rgb(222,148,37)" fg:x="212" fg:w="1"/><text x="21.7510%" y="254.50"></text></g><g><title>_signature_from_function (inspect.py:2373) (1 samples, 0.10%)</title><rect x="21.6024%" y="244" width="0.1014%" height="15" fill="rgb(234,67,33)" fg:x="213" fg:w="1"/><text x="21.8524%" y="254.50"></text></g><g><title>_signature_from_function (inspect.py:2374) (1 samples, 0.10%)</title><rect x="21.7039%" y="244" width="0.1014%" height="15" fill="rgb(247,98,35)" fg:x="214" fg:w="1"/><text x="21.9539%" y="254.50"></text></g><g><title>__init__ (inspect.py:2685) (3 samples, 0.30%)</title><rect x="22.0081%" y="260" width="0.3043%" height="15" fill="rgb(247,138,52)" fg:x="217" fg:w="3"/><text x="22.2581%" y="270.50"></text></g><g><title>__call__ (enum.py:717) (2 samples, 0.20%)</title><rect x="22.1095%" y="276" width="0.2028%" height="15" fill="rgb(213,79,30)" fg:x="218" fg:w="2"/><text x="22.3595%" y="286.50"></text></g><g><title>__init__ (inspect.py:2693) (1 samples, 0.10%)</title><rect x="22.3124%" y="260" width="0.1014%" height="15" fill="rgb(246,177,23)" fg:x="220" fg:w="1"/><text x="22.5624%" y="270.50"></text></g><g><title>_signature_from_function (inspect.py:2376) (7 samples, 0.71%)</title><rect x="21.8053%" y="244" width="0.7099%" height="15" fill="rgb(230,62,27)" fg:x="215" fg:w="7"/><text x="22.0553%" y="254.50"></text></g><g><title>__init__ (inspect.py:2696) (1 samples, 0.10%)</title><rect x="22.4138%" y="260" width="0.1014%" height="15" fill="rgb(216,154,8)" fg:x="221" fg:w="1"/><text x="22.6638%" y="270.50"></text></g><g><title>_signature_from_function (inspect.py:2384) (1 samples, 0.10%)</title><rect x="22.5152%" y="244" width="0.1014%" height="15" fill="rgb(244,35,45)" fg:x="222" fg:w="1"/><text x="22.7652%" y="254.50"></text></g><g><title>__init__ (inspect.py:2685) (1 samples, 0.10%)</title><rect x="22.6166%" y="260" width="0.1014%" height="15" fill="rgb(251,115,12)" fg:x="223" fg:w="1"/><text x="22.8666%" y="270.50"></text></g><g><title>__init__ (inspect.py:2689) (1 samples, 0.10%)</title><rect x="22.7181%" y="260" width="0.1014%" height="15" fill="rgb(240,54,50)" fg:x="224" fg:w="1"/><text x="22.9681%" y="270.50"></text></g><g><title>_signature_from_function (inspect.py:2385) (4 samples, 0.41%)</title><rect x="22.6166%" y="244" width="0.4057%" height="15" fill="rgb(233,84,52)" fg:x="223" fg:w="4"/><text x="22.8666%" y="254.50"></text></g><g><title>__init__ (inspect.py:2693) (2 samples, 0.20%)</title><rect x="22.8195%" y="260" width="0.2028%" height="15" fill="rgb(207,117,47)" fg:x="225" fg:w="2"/><text x="23.0695%" y="270.50"></text></g><g><title>_signature_from_function (inspect.py:2392) (1 samples, 0.10%)</title><rect x="23.0223%" y="244" width="0.1014%" height="15" fill="rgb(249,43,39)" fg:x="227" fg:w="1"/><text x="23.2723%" y="254.50"></text></g><g><title>_signature_from_function (inspect.py:2416) (2 samples, 0.20%)</title><rect x="23.1237%" y="244" width="0.2028%" height="15" fill="rgb(209,38,44)" fg:x="228" fg:w="2"/><text x="23.3737%" y="254.50"></text></g><g><title>__init__ (inspect.py:2703) (1 samples, 0.10%)</title><rect x="23.2252%" y="260" width="0.1014%" height="15" fill="rgb(236,212,23)" fg:x="229" fg:w="1"/><text x="23.4752%" y="270.50"></text></g><g><title>__init__ (inspect.py:3018) (7 samples, 0.71%)</title><rect x="23.7323%" y="260" width="0.7099%" height="15" fill="rgb(242,79,21)" fg:x="234" fg:w="7"/><text x="23.9823%" y="270.50"></text></g><g><title>&lt;genexpr&gt; (inspect.py:3018) (1 samples, 0.10%)</title><rect x="24.3408%" y="276" width="0.1014%" height="15" fill="rgb(211,96,35)" fg:x="240" fg:w="1"/><text x="24.5908%" y="286.50"></text></g><g><title>parse_cond (pycond.py:783) (63 samples, 6.39%)</title><rect x="18.1542%" y="164" width="6.3895%" height="15" fill="rgb(253,215,40)" fg:x="179" fg:w="63"/><text x="18.4042%" y="174.50">parse_co..</text></g><g><title>sig_args (pycond.py:56) (63 samples, 6.39%)</title><rect x="18.1542%" y="180" width="6.3895%" height="15" fill="rgb(211,81,21)" fg:x="179" fg:w="63"/><text x="18.4042%" y="190.50">sig_args..</text></g><g><title>signature (inspect.py:3279) (59 samples, 5.98%)</title><rect x="18.5598%" y="196" width="5.9838%" height="15" fill="rgb(208,190,38)" fg:x="183" fg:w="59"/><text x="18.8098%" y="206.50">signatur..</text></g><g><title>from_callable (inspect.py:3027) (57 samples, 5.78%)</title><rect x="18.7627%" y="212" width="5.7809%" height="15" fill="rgb(235,213,38)" fg:x="185" fg:w="57"/><text x="19.0127%" y="222.50">from_ca..</text></g><g><title>_signature_from_callable (inspect.py:2514) (45 samples, 4.56%)</title><rect x="19.9797%" y="228" width="4.5639%" height="15" fill="rgb(237,122,38)" fg:x="197" fg:w="45"/><text x="20.2297%" y="238.50">_sign..</text></g><g><title>_signature_from_function (inspect.py:2421) (12 samples, 1.22%)</title><rect x="23.3266%" y="244" width="1.2170%" height="15" fill="rgb(244,218,35)" fg:x="230" fg:w="12"/><text x="23.5766%" y="254.50"></text></g><g><title>__init__ (inspect.py:3020) (1 samples, 0.10%)</title><rect x="24.4422%" y="260" width="0.1014%" height="15" fill="rgb(240,68,47)" fg:x="241" fg:w="1"/><text x="24.6922%" y="270.50"></text></g><g><title>literal_eval (ast.py:110) (10 samples, 1.01%)</title><rect x="25.8621%" y="196" width="1.0142%" height="15" fill="rgb(210,16,53)" fg:x="255" fg:w="10"/><text x="26.1121%" y="206.50"></text></g><g><title>_convert (ast.py:90) (10 samples, 1.01%)</title><rect x="25.8621%" y="212" width="1.0142%" height="15" fill="rgb(235,124,12)" fg:x="255" fg:w="10"/><text x="26.1121%" y="222.50"></text></g><g><title>_convert (ast.py:90) (10 samples, 1.01%)</title><rect x="25.8621%" y="228" width="1.0142%" height="15" fill="rgb(224,169,11)" fg:x="255" fg:w="10"/><text x="26.1121%" y="238.50"></text></g><g><title>parse (ast.py:50) (40 samples, 4.06%)</title><rect x="26.9777%" y="212" width="4.0568%" height="15" fill="rgb(250,166,2)" fg:x="266" fg:w="40"/><text x="27.2277%" y="222.50">pars..</text></g><g><title>literal_eval (ast.py:64) (42 samples, 4.26%)</title><rect x="26.8763%" y="196" width="4.2596%" height="15" fill="rgb(242,216,29)" fg:x="265" fg:w="42"/><text x="27.1263%" y="206.50">liter..</text></g><g><title>parse (ast.py:51) (1 samples, 0.10%)</title><rect x="31.0345%" y="212" width="0.1014%" height="15" fill="rgb(230,116,27)" fg:x="306" fg:w="1"/><text x="31.2845%" y="222.50"></text></g><g><title>literal_eval (ast.py:65) (2 samples, 0.20%)</title><rect x="31.1359%" y="196" width="0.2028%" height="15" fill="rgb(228,99,48)" fg:x="307" fg:w="2"/><text x="31.3859%" y="206.50"></text></g><g><title>literal_eval (ast.py:66) (1 samples, 0.10%)</title><rect x="31.3387%" y="196" width="0.1014%" height="15" fill="rgb(253,11,6)" fg:x="309" fg:w="1"/><text x="31.5887%" y="206.50"></text></g><g><title>literal_eval (ast.py:67) (1 samples, 0.10%)</title><rect x="31.4402%" y="196" width="0.1014%" height="15" fill="rgb(247,143,39)" fg:x="310" fg:w="1"/><text x="31.6902%" y="206.50"></text></g><g><title>literal_eval (ast.py:72) (1 samples, 0.10%)</title><rect x="31.5416%" y="196" width="0.1014%" height="15" fill="rgb(236,97,10)" fg:x="311" fg:w="1"/><text x="31.7916%" y="206.50"></text></g><g><title>prepare (pycond.py:436) (71 samples, 7.20%)</title><rect x="24.6450%" y="180" width="7.2008%" height="15" fill="rgb(233,208,19)" fg:x="243" fg:w="71"/><text x="24.8950%" y="190.50">prepare (p..</text></g><g><title>literal_eval (ast.py:84) (2 samples, 0.20%)</title><rect x="31.6430%" y="196" width="0.2028%" height="15" fill="rgb(216,164,2)" fg:x="312" fg:w="2"/><text x="31.8930%" y="206.50"></text></g><g><title>parse_struct_cond (pycond.py:480) (2 samples, 0.20%)</title><rect x="32.0487%" y="212" width="0.2028%" height="15" fill="rgb(220,129,5)" fg:x="316" fg:w="2"/><text x="32.2987%" y="222.50"></text></g><g><title>key_type (pycond.py:464) (2 samples, 0.20%)</title><rect x="32.0487%" y="228" width="0.2028%" height="15" fill="rgb(242,17,10)" fg:x="316" fg:w="2"/><text x="32.2987%" y="238.50"></text></g><g><title>is_deep_list_path (pycond.py:419) (2 samples, 0.20%)</title><rect x="32.0487%" y="244" width="0.2028%" height="15" fill="rgb(242,107,0)" fg:x="316" fg:w="2"/><text x="32.2987%" y="254.50"></text></g><g><title>&lt;listcomp&gt; (pycond.py:419) (2 samples, 0.20%)</title><rect x="32.0487%" y="260" width="0.2028%" height="15" fill="rgb(251,28,31)" fg:x="316" fg:w="2"/><text x="32.2987%" y="270.50"></text></g><g><title>parse_struct_cond (pycond.py:503) (1 samples, 0.10%)</title><rect x="32.2515%" y="212" width="0.1014%" height="15" fill="rgb(233,223,10)" fg:x="318" fg:w="1"/><text x="32.5015%" y="222.50"></text></g><g><title>atomic_cond (pycond.py:556) (1 samples, 0.10%)</title><rect x="32.3529%" y="228" width="0.1014%" height="15" fill="rgb(215,21,27)" fg:x="319" fg:w="1"/><text x="32.6029%" y="238.50"></text></g><g><title>atomic_cond (pycond.py:566) (1 samples, 0.10%)</title><rect x="32.4544%" y="228" width="0.1014%" height="15" fill="rgb(232,23,21)" fg:x="320" fg:w="1"/><text x="32.7044%" y="238.50"></text></g><g><title>atomic_cond (pycond.py:572) (1 samples, 0.10%)</title><rect x="32.5558%" y="228" width="0.1014%" height="15" fill="rgb(244,5,23)" fg:x="321" fg:w="1"/><text x="32.8058%" y="238.50"></text></g><g><title>parse_struct_cond (pycond.py:504) (4 samples, 0.41%)</title><rect x="32.3529%" y="212" width="0.4057%" height="15" fill="rgb(226,81,46)" fg:x="319" fg:w="4"/><text x="32.6029%" y="222.50"></text></g><g><title>atomic_cond (pycond.py:578) (1 samples, 0.10%)</title><rect x="32.6572%" y="228" width="0.1014%" height="15" fill="rgb(247,70,30)" fg:x="322" fg:w="1"/><text x="32.9072%" y="238.50"></text></g><g><title>parse_struct_cond (pycond.py:479) (1 samples, 0.10%)</title><rect x="32.7586%" y="228" width="0.1014%" height="15" fill="rgb(212,68,19)" fg:x="323" fg:w="1"/><text x="33.0086%" y="238.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (1 samples, 0.10%)</title><rect x="32.8600%" y="324" width="0.1014%" height="15" fill="rgb(240,187,13)" fg:x="324" fg:w="1"/><text x="33.1100%" y="334.50"></text></g><g><title>parse_struct_cond (pycond.py:504) (1 samples, 0.10%)</title><rect x="32.8600%" y="340" width="0.1014%" height="15" fill="rgb(223,113,26)" fg:x="324" fg:w="1"/><text x="33.1100%" y="350.50"></text></g><g><title>atomic_cond (pycond.py:567) (1 samples, 0.10%)</title><rect x="32.8600%" y="356" width="0.1014%" height="15" fill="rgb(206,192,2)" fg:x="324" fg:w="1"/><text x="33.1100%" y="366.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (2 samples, 0.20%)</title><rect x="32.8600%" y="276" width="0.2028%" height="15" fill="rgb(241,108,4)" fg:x="324" fg:w="2"/><text x="33.1100%" y="286.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (2 samples, 0.20%)</title><rect x="32.8600%" y="292" width="0.2028%" height="15" fill="rgb(247,173,49)" fg:x="324" fg:w="2"/><text x="33.1100%" y="302.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (2 samples, 0.20%)</title><rect x="32.8600%" y="308" width="0.2028%" height="15" fill="rgb(224,114,35)" fg:x="324" fg:w="2"/><text x="33.1100%" y="318.50"></text></g><g><title>parse_struct_cond (pycond.py:504) (1 samples, 0.10%)</title><rect x="32.9615%" y="324" width="0.1014%" height="15" fill="rgb(245,159,27)" fg:x="325" fg:w="1"/><text x="33.2115%" y="334.50"></text></g><g><title>atomic_cond (pycond.py:564) (1 samples, 0.10%)</title><rect x="32.9615%" y="340" width="0.1014%" height="15" fill="rgb(245,172,44)" fg:x="325" fg:w="1"/><text x="33.2115%" y="350.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (11 samples, 1.12%)</title><rect x="32.0487%" y="196" width="1.1156%" height="15" fill="rgb(236,23,11)" fg:x="316" fg:w="11"/><text x="32.2987%" y="206.50"></text></g><g><title>parse_struct_cond (pycond.py:508) (4 samples, 0.41%)</title><rect x="32.7586%" y="212" width="0.4057%" height="15" fill="rgb(205,117,38)" fg:x="323" fg:w="4"/><text x="33.0086%" y="222.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (3 samples, 0.30%)</title><rect x="32.8600%" y="228" width="0.3043%" height="15" fill="rgb(237,72,25)" fg:x="324" fg:w="3"/><text x="33.1100%" y="238.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (3 samples, 0.30%)</title><rect x="32.8600%" y="244" width="0.3043%" height="15" fill="rgb(244,70,9)" fg:x="324" fg:w="3"/><text x="33.1100%" y="254.50"></text></g><g><title>parse_struct_cond (pycond.py:488) (3 samples, 0.30%)</title><rect x="32.8600%" y="260" width="0.3043%" height="15" fill="rgb(217,125,39)" fg:x="324" fg:w="3"/><text x="33.1100%" y="270.50"></text></g><g><title>parse_struct_cond (pycond.py:504) (1 samples, 0.10%)</title><rect x="33.0629%" y="276" width="0.1014%" height="15" fill="rgb(235,36,10)" fg:x="326" fg:w="1"/><text x="33.3129%" y="286.50"></text></g><g><title>atomic_cond (pycond.py:532) (1 samples, 0.10%)</title><rect x="33.0629%" y="292" width="0.1014%" height="15" fill="rgb(251,123,47)" fg:x="326" fg:w="1"/><text x="33.3129%" y="302.50"></text></g><g><title>parse_struct_cond (pycond.py:499) (1 samples, 0.10%)</title><rect x="33.1643%" y="196" width="0.1014%" height="15" fill="rgb(221,13,13)" fg:x="327" fg:w="1"/><text x="33.4143%" y="206.50"></text></g><g><title>parse_struct_cond (pycond.py:501) (2 samples, 0.20%)</title><rect x="33.2657%" y="196" width="0.2028%" height="15" fill="rgb(238,131,9)" fg:x="328" fg:w="2"/><text x="33.5157%" y="206.50"></text></g><g><title>atomic_cond (pycond.py:520) (1 samples, 0.10%)</title><rect x="33.4686%" y="212" width="0.1014%" height="15" fill="rgb(211,50,8)" fg:x="330" fg:w="1"/><text x="33.7186%" y="222.50"></text></g><g><title>atomic_cond (pycond.py:522) (1 samples, 0.10%)</title><rect x="33.5700%" y="212" width="0.1014%" height="15" fill="rgb(245,182,24)" fg:x="331" fg:w="1"/><text x="33.8200%" y="222.50"></text></g><g><title>atomic_cond (pycond.py:525) (1 samples, 0.10%)</title><rect x="33.6714%" y="212" width="0.1014%" height="15" fill="rgb(242,14,37)" fg:x="332" fg:w="1"/><text x="33.9214%" y="222.50"></text></g><g><title>atomic_cond (pycond.py:553) (1 samples, 0.10%)</title><rect x="33.7728%" y="212" width="0.1014%" height="15" fill="rgb(246,228,12)" fg:x="333" fg:w="1"/><text x="34.0228%" y="222.50"></text></g><g><title>atomic_cond (pycond.py:560) (1 samples, 0.10%)</title><rect x="33.8742%" y="212" width="0.1014%" height="15" fill="rgb(213,55,15)" fg:x="334" fg:w="1"/><text x="34.1242%" y="222.50"></text></g><g><title>py_type (pycond.py:853) (1 samples, 0.10%)</title><rect x="33.8742%" y="228" width="0.1014%" height="15" fill="rgb(209,9,3)" fg:x="334" fg:w="1"/><text x="34.1242%" y="238.50"></text></g><g><title>is_str (pycond.py:53) (1 samples, 0.10%)</title><rect x="33.8742%" y="244" width="0.1014%" height="15" fill="rgb(230,59,30)" fg:x="334" fg:w="1"/><text x="34.1242%" y="254.50"></text></g><g><title>f_from_lookup_provider (pycond.py:617) (1 samples, 0.10%)</title><rect x="33.9757%" y="228" width="0.1014%" height="15" fill="rgb(209,121,21)" fg:x="335" fg:w="1"/><text x="34.2257%" y="238.50"></text></g><g><title>atomic_cond (pycond.py:562) (2 samples, 0.20%)</title><rect x="33.9757%" y="212" width="0.2028%" height="15" fill="rgb(220,109,13)" fg:x="335" fg:w="2"/><text x="34.2257%" y="222.50"></text></g><g><title>f_from_lookup_provider (pycond.py:618) (1 samples, 0.10%)</title><rect x="34.0771%" y="228" width="0.1014%" height="15" fill="rgb(232,18,1)" fg:x="336" fg:w="1"/><text x="34.3271%" y="238.50"></text></g><g><title>atomic_cond (pycond.py:565) (1 samples, 0.10%)</title><rect x="34.1785%" y="212" width="0.1014%" height="15" fill="rgb(215,41,42)" fg:x="337" fg:w="1"/><text x="34.4285%" y="222.50"></text></g><g><title>parse_cond (pycond.py:784) (97 samples, 9.84%)</title><rect x="24.5436%" y="164" width="9.8377%" height="15" fill="rgb(224,123,36)" fg:x="242" fg:w="97"/><text x="24.7936%" y="174.50">parse_cond (py..</text></g><g><title>prepare (pycond.py:437) (25 samples, 2.54%)</title><rect x="31.8458%" y="180" width="2.5355%" height="15" fill="rgb(240,125,3)" fg:x="314" fg:w="25"/><text x="32.0958%" y="190.50">pr..</text></g><g><title>parse_struct_cond (pycond.py:504) (9 samples, 0.91%)</title><rect x="33.4686%" y="196" width="0.9128%" height="15" fill="rgb(205,98,50)" fg:x="330" fg:w="9"/><text x="33.7186%" y="206.50"></text></g><g><title>atomic_cond (pycond.py:566) (1 samples, 0.10%)</title><rect x="34.2799%" y="212" width="0.1014%" height="15" fill="rgb(205,185,37)" fg:x="338" fg:w="1"/><text x="34.5299%" y="222.50"></text></g><g><title>sorted_keys (pycond.py:731) (1 samples, 0.10%)</title><rect x="34.3813%" y="180" width="0.1014%" height="15" fill="rgb(238,207,15)" fg:x="339" fg:w="1"/><text x="34.6313%" y="190.50"></text></g><g><title>sorted_keys (pycond.py:732) (2 samples, 0.20%)</title><rect x="34.4828%" y="180" width="0.2028%" height="15" fill="rgb(213,199,42)" fg:x="340" fg:w="2"/><text x="34.7328%" y="190.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:247) (176 samples, 17.85%)</title><rect x="17.0385%" y="132" width="17.8499%" height="15" fill="rgb(235,201,11)" fg:x="168" fg:w="176"/><text x="17.2885%" y="142.50">processConditions (pyefis/in..</text></g><g><title>pycond (pycond.py:834) (170 samples, 17.24%)</title><rect x="17.6471%" y="148" width="17.2414%" height="15" fill="rgb(207,46,11)" fg:x="174" fg:w="170"/><text x="17.8971%" y="158.50">pycond (pycond.py:834)</text></g><g><title>parse_cond (pycond.py:785) (5 samples, 0.51%)</title><rect x="34.3813%" y="164" width="0.5071%" height="15" fill="rgb(241,35,35)" fg:x="339" fg:w="5"/><text x="34.6313%" y="174.50"></text></g><g><title>sorted_keys (pycond.py:733) (2 samples, 0.20%)</title><rect x="34.6856%" y="180" width="0.2028%" height="15" fill="rgb(243,32,47)" fg:x="342" fg:w="2"/><text x="34.9356%" y="190.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:249) (2 samples, 0.20%)</title><rect x="34.8884%" y="132" width="0.2028%" height="15" fill="rgb(247,202,23)" fg:x="344" fg:w="2"/><text x="35.1384%" y="142.50"></text></g><g><title>getRunningScreen (pyefis/gui.py:145) (1 samples, 0.10%)</title><rect x="34.9899%" y="148" width="0.1014%" height="15" fill="rgb(219,102,11)" fg:x="345" fg:w="1"/><text x="35.2399%" y="158.50"></text></g><g><title>processActions (pyefis/instruments/button/__init__.py:275) (3 samples, 0.30%)</title><rect x="35.0913%" y="148" width="0.3043%" height="15" fill="rgb(243,110,44)" fg:x="346" fg:w="3"/><text x="35.3413%" y="158.50"></text></g><g><title>processActions (pyefis/instruments/button/__init__.py:277) (5 samples, 0.51%)</title><rect x="35.3955%" y="148" width="0.5071%" height="15" fill="rgb(222,74,54)" fg:x="349" fg:w="5"/><text x="35.6455%" y="158.50"></text></g><g><title>processActions (pyefis/instruments/button/__init__.py:279) (2 samples, 0.20%)</title><rect x="35.9026%" y="148" width="0.2028%" height="15" fill="rgb(216,99,12)" fg:x="354" fg:w="2"/><text x="36.1526%" y="158.50"></text></g><g><title>processActions (pyefis/instruments/button/__init__.py:280) (5 samples, 0.51%)</title><rect x="36.1055%" y="148" width="0.5071%" height="15" fill="rgb(226,22,26)" fg:x="356" fg:w="5"/><text x="36.3555%" y="158.50"></text></g><g><title>trigger (pyefis/hmi/actionclass.py:60) (2 samples, 0.20%)</title><rect x="36.4097%" y="164" width="0.2028%" height="15" fill="rgb(217,163,10)" fg:x="359" fg:w="2"/><text x="36.6597%" y="174.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:289) (13 samples, 1.32%)</title><rect x="36.6126%" y="164" width="1.3185%" height="15" fill="rgb(213,25,53)" fg:x="361" fg:w="13"/><text x="36.8626%" y="174.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:293) (2 samples, 0.20%)</title><rect x="37.9310%" y="164" width="0.2028%" height="15" fill="rgb(252,105,26)" fg:x="374" fg:w="2"/><text x="38.1810%" y="174.50"></text></g><g><title>setTitle (pyefis/instruments/button/__init__.py:163) (2 samples, 0.20%)</title><rect x="37.9310%" y="180" width="0.2028%" height="15" fill="rgb(220,39,43)" fg:x="374" fg:w="2"/><text x="38.1810%" y="190.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:313) (4 samples, 0.41%)</title><rect x="38.1339%" y="164" width="0.4057%" height="15" fill="rgb(229,68,48)" fg:x="376" fg:w="4"/><text x="38.3839%" y="174.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:314) (13 samples, 1.32%)</title><rect x="38.5396%" y="164" width="1.3185%" height="15" fill="rgb(252,8,32)" fg:x="380" fg:w="13"/><text x="38.7896%" y="174.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:316) (1 samples, 0.10%)</title><rect x="39.8580%" y="164" width="0.1014%" height="15" fill="rgb(223,20,43)" fg:x="393" fg:w="1"/><text x="40.1080%" y="174.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:318) (1 samples, 0.10%)</title><rect x="39.9594%" y="164" width="0.1014%" height="15" fill="rgb(229,81,49)" fg:x="394" fg:w="1"/><text x="40.2094%" y="174.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:321) (1 samples, 0.10%)</title><rect x="40.0609%" y="164" width="0.1014%" height="15" fill="rgb(236,28,36)" fg:x="395" fg:w="1"/><text x="40.3109%" y="174.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:325) (223 samples, 22.62%)</title><rect x="40.1623%" y="164" width="22.6166%" height="15" fill="rgb(249,185,26)" fg:x="396" fg:w="223"/><text x="40.4123%" y="174.50">setStyle (pyefis/instruments/button/..</text></g><g><title>processActions (pyefis/instruments/button/__init__.py:283) (264 samples, 26.77%)</title><rect x="36.6126%" y="148" width="26.7748%" height="15" fill="rgb(249,174,33)" fg:x="361" fg:w="264"/><text x="36.8626%" y="158.50">processActions (pyefis/instruments/button/_..</text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:327) (6 samples, 0.61%)</title><rect x="62.7789%" y="164" width="0.6085%" height="15" fill="rgb(233,201,37)" fg:x="619" fg:w="6"/><text x="63.0289%" y="174.50"></text></g><g><title>debug (logging/__init__.py:1476) (1 samples, 0.10%)</title><rect x="63.6917%" y="164" width="0.1014%" height="15" fill="rgb(221,78,26)" fg:x="628" fg:w="1"/><text x="63.9417%" y="174.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:250) (284 samples, 28.80%)</title><rect x="35.0913%" y="132" width="28.8032%" height="15" fill="rgb(250,127,30)" fg:x="346" fg:w="284"/><text x="35.3413%" y="142.50">processConditions (pyefis/instruments/button/_..</text></g><g><title>processActions (pyefis/instruments/button/__init__.py:284) (5 samples, 0.51%)</title><rect x="63.3874%" y="148" width="0.5071%" height="15" fill="rgb(230,49,44)" fg:x="625" fg:w="5"/><text x="63.6374%" y="158.50"></text></g><g><title>getRunningScreen (pyefis/gui.py:145) (1 samples, 0.10%)</title><rect x="63.7931%" y="164" width="0.1014%" height="15" fill="rgb(229,67,23)" fg:x="629" fg:w="1"/><text x="64.0431%" y="174.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:251) (1 samples, 0.10%)</title><rect x="63.8945%" y="132" width="0.1014%" height="15" fill="rgb(249,83,47)" fg:x="630" fg:w="1"/><text x="64.1445%" y="142.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:256) (1 samples, 0.10%)</title><rect x="63.9959%" y="132" width="0.1014%" height="15" fill="rgb(215,43,3)" fg:x="631" fg:w="1"/><text x="64.2459%" y="142.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:258) (1 samples, 0.10%)</title><rect x="64.0974%" y="132" width="0.1014%" height="15" fill="rgb(238,154,13)" fg:x="632" fg:w="1"/><text x="64.3474%" y="142.50"></text></g><g><title>&lt;lambda&gt; (pyefis/instruments/button/__init__.py:120) (536 samples, 54.36%)</title><rect x="10.1420%" y="100" width="54.3611%" height="15" fill="rgb(219,56,2)" fg:x="100" fg:w="536"/><text x="10.3920%" y="110.50">&lt;lambda&gt; (pyefis/instruments/button/__init__.py:120)</text></g><g><title>dataChanged (pyefis/instruments/button/__init__.py:155) (533 samples, 54.06%)</title><rect x="10.4462%" y="116" width="54.0568%" height="15" fill="rgb(233,0,4)" fg:x="103" fg:w="533"/><text x="10.6962%" y="126.50">dataChanged (pyefis/instruments/button/__init__.py:155)</text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:259) (3 samples, 0.30%)</title><rect x="64.1988%" y="132" width="0.3043%" height="15" fill="rgb(235,30,7)" fg:x="633" fg:w="3"/><text x="64.4488%" y="142.50"></text></g><g><title>debug (logging/__init__.py:1467) (2 samples, 0.20%)</title><rect x="64.3002%" y="148" width="0.2028%" height="15" fill="rgb(250,79,13)" fg:x="634" fg:w="2"/><text x="64.5502%" y="158.50"></text></g><g><title>parse_cond (pycond.py:783) (1 samples, 0.10%)</title><rect x="64.5030%" y="164" width="0.1014%" height="15" fill="rgb(211,146,34)" fg:x="636" fg:w="1"/><text x="64.7530%" y="174.50"></text></g><g><title>sig_args (pycond.py:56) (1 samples, 0.10%)</title><rect x="64.5030%" y="180" width="0.1014%" height="15" fill="rgb(228,22,38)" fg:x="636" fg:w="1"/><text x="64.7530%" y="190.50"></text></g><g><title>signature (inspect.py:3279) (1 samples, 0.10%)</title><rect x="64.5030%" y="196" width="0.1014%" height="15" fill="rgb(235,168,5)" fg:x="636" fg:w="1"/><text x="64.7530%" y="206.50"></text></g><g><title>from_callable (inspect.py:3027) (1 samples, 0.10%)</title><rect x="64.5030%" y="212" width="0.1014%" height="15" fill="rgb(221,155,16)" fg:x="636" fg:w="1"/><text x="64.7530%" y="222.50"></text></g><g><title>_signature_from_callable (inspect.py:2514) (1 samples, 0.10%)</title><rect x="64.5030%" y="228" width="0.1014%" height="15" fill="rgb(215,215,53)" fg:x="636" fg:w="1"/><text x="64.7530%" y="238.50"></text></g><g><title>_signature_from_function (inspect.py:2376) (1 samples, 0.10%)</title><rect x="64.5030%" y="244" width="0.1014%" height="15" fill="rgb(223,4,10)" fg:x="636" fg:w="1"/><text x="64.7530%" y="254.50"></text></g><g><title>__init__ (inspect.py:2721) (1 samples, 0.10%)</title><rect x="64.5030%" y="260" width="0.1014%" height="15" fill="rgb(234,103,6)" fg:x="636" fg:w="1"/><text x="64.7530%" y="270.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:247) (3 samples, 0.30%)</title><rect x="64.5030%" y="132" width="0.3043%" height="15" fill="rgb(227,97,0)" fg:x="636" fg:w="3"/><text x="64.7530%" y="142.50"></text></g><g><title>pycond (pycond.py:834) (3 samples, 0.30%)</title><rect x="64.5030%" y="148" width="0.3043%" height="15" fill="rgb(234,150,53)" fg:x="636" fg:w="3"/><text x="64.7530%" y="158.50"></text></g><g><title>parse_cond (pycond.py:784) (2 samples, 0.20%)</title><rect x="64.6045%" y="164" width="0.2028%" height="15" fill="rgb(228,201,54)" fg:x="637" fg:w="2"/><text x="64.8545%" y="174.50"></text></g><g><title>prepare (pycond.py:436) (1 samples, 0.10%)</title><rect x="64.7059%" y="180" width="0.1014%" height="15" fill="rgb(222,22,37)" fg:x="638" fg:w="1"/><text x="64.9559%" y="190.50"></text></g><g><title>literal_eval (ast.py:64) (1 samples, 0.10%)</title><rect x="64.7059%" y="196" width="0.1014%" height="15" fill="rgb(237,53,32)" fg:x="638" fg:w="1"/><text x="64.9559%" y="206.50"></text></g><g><title>parse (ast.py:50) (1 samples, 0.10%)</title><rect x="64.7059%" y="212" width="0.1014%" height="15" fill="rgb(233,25,53)" fg:x="638" fg:w="1"/><text x="64.9559%" y="222.50"></text></g><g><title>&lt;lambda&gt; (pyefis/instruments/button/__init__.py:122) (4 samples, 0.41%)</title><rect x="64.5030%" y="100" width="0.4057%" height="15" fill="rgb(210,40,34)" fg:x="636" fg:w="4"/><text x="64.7530%" y="110.50"></text></g><g><title>dataChanged (pyefis/instruments/button/__init__.py:155) (4 samples, 0.41%)</title><rect x="64.5030%" y="116" width="0.4057%" height="15" fill="rgb(241,220,44)" fg:x="636" fg:w="4"/><text x="64.7530%" y="126.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:250) (1 samples, 0.10%)</title><rect x="64.8073%" y="132" width="0.1014%" height="15" fill="rgb(235,28,35)" fg:x="639" fg:w="1"/><text x="65.0573%" y="142.50"></text></g><g><title>processActions (pyefis/instruments/button/__init__.py:283) (1 samples, 0.10%)</title><rect x="64.8073%" y="148" width="0.1014%" height="15" fill="rgb(210,56,17)" fg:x="639" fg:w="1"/><text x="65.0573%" y="158.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:314) (1 samples, 0.10%)</title><rect x="64.8073%" y="164" width="0.1014%" height="15" fill="rgb(224,130,29)" fg:x="639" fg:w="1"/><text x="65.0573%" y="174.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:247) (1 samples, 0.10%)</title><rect x="64.9087%" y="132" width="0.1014%" height="15" fill="rgb(235,212,8)" fg:x="640" fg:w="1"/><text x="65.1587%" y="142.50"></text></g><g><title>pycond (pycond.py:834) (1 samples, 0.10%)</title><rect x="64.9087%" y="148" width="0.1014%" height="15" fill="rgb(223,33,50)" fg:x="640" fg:w="1"/><text x="65.1587%" y="158.50"></text></g><g><title>parse_cond (pycond.py:783) (1 samples, 0.10%)</title><rect x="64.9087%" y="164" width="0.1014%" height="15" fill="rgb(219,149,13)" fg:x="640" fg:w="1"/><text x="65.1587%" y="174.50"></text></g><g><title>sig_args (pycond.py:56) (1 samples, 0.10%)</title><rect x="64.9087%" y="180" width="0.1014%" height="15" fill="rgb(250,156,29)" fg:x="640" fg:w="1"/><text x="65.1587%" y="190.50"></text></g><g><title>&lt;lambda&gt; (pyefis/instruments/button/__init__.py:125) (2 samples, 0.20%)</title><rect x="64.9087%" y="100" width="0.2028%" height="15" fill="rgb(216,193,19)" fg:x="640" fg:w="2"/><text x="65.1587%" y="110.50"></text></g><g><title>dataChanged (pyefis/instruments/button/__init__.py:155) (2 samples, 0.20%)</title><rect x="64.9087%" y="116" width="0.2028%" height="15" fill="rgb(216,135,14)" fg:x="640" fg:w="2"/><text x="65.1587%" y="126.50"></text></g><g><title>processConditions (pyefis/instruments/button/__init__.py:250) (1 samples, 0.10%)</title><rect x="65.0101%" y="132" width="0.1014%" height="15" fill="rgb(241,47,5)" fg:x="641" fg:w="1"/><text x="65.2601%" y="142.50"></text></g><g><title>processActions (pyefis/instruments/button/__init__.py:283) (1 samples, 0.10%)</title><rect x="65.0101%" y="148" width="0.1014%" height="15" fill="rgb(233,42,35)" fg:x="641" fg:w="1"/><text x="65.2601%" y="158.50"></text></g><g><title>setStyle (pyefis/instruments/button/__init__.py:289) (1 samples, 0.10%)</title><rect x="65.0101%" y="164" width="0.1014%" height="15" fill="rgb(231,13,6)" fg:x="641" fg:w="1"/><text x="65.2601%" y="174.50"></text></g><g><title>_on_repaint_timer (pyefis/instruments/gauges/abstract.py:189) (1 samples, 0.10%)</title><rect x="65.1116%" y="100" width="0.1014%" height="15" fill="rgb(207,181,40)" fg:x="642" fg:w="1"/><text x="65.3616%" y="110.50"></text></g><g><title>paintEvent (pyefis/instruments/airspeed/__init__.py:400) (7 samples, 0.71%)</title><rect x="65.2130%" y="100" width="0.7099%" height="15" fill="rgb(254,173,49)" fg:x="643" fg:w="7"/><text x="65.4630%" y="110.50"></text></g><g><title>paintEvent (pyefis/instruments/altimeter/__init__.py:355) (3 samples, 0.30%)</title><rect x="65.9229%" y="100" width="0.3043%" height="15" fill="rgb(221,1,38)" fg:x="650" fg:w="3"/><text x="66.1729%" y="110.50"></text></g><g><title>paintEvent (pyefis/instruments/gauges/arc.py:149) (1 samples, 0.10%)</title><rect x="66.2272%" y="100" width="0.1014%" height="15" fill="rgb(206,124,46)" fg:x="653" fg:w="1"/><text x="66.4772%" y="110.50"></text></g><g><title>drawCircle (pyefis/instruments/gauges/abstract.py:27) (1 samples, 0.10%)</title><rect x="66.2272%" y="116" width="0.1014%" height="15" fill="rgb(249,21,11)" fg:x="653" fg:w="1"/><text x="66.4772%" y="126.50"></text></g><g><title>paintEvent (pyefis/instruments/gauges/arc.py:161) (1 samples, 0.10%)</title><rect x="66.3286%" y="100" width="0.1014%" height="15" fill="rgb(222,201,40)" fg:x="654" fg:w="1"/><text x="66.5786%" y="110.50"></text></g><g><title>drawCircle (pyefis/instruments/gauges/abstract.py:26) (1 samples, 0.10%)</title><rect x="66.3286%" y="116" width="0.1014%" height="15" fill="rgb(235,61,29)" fg:x="654" fg:w="1"/><text x="66.5786%" y="126.50"></text></g><g><title>paintEvent (pyefis/instruments/gauges/arc.py:176) (1 samples, 0.10%)</title><rect x="66.4300%" y="100" width="0.1014%" height="15" fill="rgb(219,207,3)" fg:x="655" fg:w="1"/><text x="66.6800%" y="110.50"></text></g><g><title>drawCircle (pyefis/instruments/gauges/abstract.py:27) (1 samples, 0.10%)</title><rect x="66.4300%" y="116" width="0.1014%" height="15" fill="rgb(222,56,46)" fg:x="655" fg:w="1"/><text x="66.6800%" y="126.50"></text></g><g><title>paintEvent (pyefis/instruments/misc/__init__.py:150) (1 samples, 0.10%)</title><rect x="66.5314%" y="100" width="0.1014%" height="15" fill="rgb(239,76,54)" fg:x="656" fg:w="1"/><text x="66.7814%" y="110.50"></text></g><g><title>paintEvent (pyefis/instruments/misc/__init__.py:161) (2 samples, 0.20%)</title><rect x="66.6329%" y="100" width="0.2028%" height="15" fill="rgb(231,124,27)" fg:x="657" fg:w="2"/><text x="66.8829%" y="110.50"></text></g><g><title>paintEvent (pyefis/instruments/misc/__init__.py:82) (1 samples, 0.10%)</title><rect x="66.8357%" y="100" width="0.1014%" height="15" fill="rgb(249,195,6)" fg:x="659" fg:w="1"/><text x="67.0857%" y="110.50"></text></g><g><title>setAIOldRoll (pyefis/instruments/ai/__init__.py:459) (1 samples, 0.10%)</title><rect x="66.9371%" y="100" width="0.1014%" height="15" fill="rgb(237,174,47)" fg:x="660" fg:w="1"/><text x="67.1871%" y="110.50"></text></g><g><title>setOld (pyefis/instruments/ai/VirtualVfr.py:629) (1 samples, 0.10%)</title><rect x="66.9371%" y="116" width="0.1014%" height="15" fill="rgb(206,201,31)" fg:x="660" fg:w="1"/><text x="67.1871%" y="126.50"></text></g><g><title>setBlank (pyefis/instruments/ai/VirtualVfr.py:704) (1 samples, 0.10%)</title><rect x="66.9371%" y="132" width="0.1014%" height="15" fill="rgb(231,57,52)" fg:x="660" fg:w="1"/><text x="67.1871%" y="142.50"></text></g><g><title>approximate_elevation (pyefis/instruments/ai/VirtualVfr.py:921) (1 samples, 0.10%)</title><rect x="67.0385%" y="132" width="0.1014%" height="15" fill="rgb(248,177,22)" fg:x="661" fg:w="1"/><text x="67.2885%" y="142.50"></text></g><g><title>setLatitude (pyefis/instruments/ai/VirtualVfr.py:554) (2 samples, 0.20%)</title><rect x="67.0385%" y="100" width="0.2028%" height="15" fill="rgb(215,211,37)" fg:x="661" fg:w="2"/><text x="67.2885%" y="110.50"></text></g><g><title>update_position (pyefis/instruments/ai/VirtualVfr.py:757) (2 samples, 0.20%)</title><rect x="67.0385%" y="116" width="0.2028%" height="15" fill="rgb(241,128,51)" fg:x="661" fg:w="2"/><text x="67.2885%" y="126.50"></text></g><g><title>approximate_elevation (pyefis/instruments/ai/VirtualVfr.py:922) (1 samples, 0.10%)</title><rect x="67.1400%" y="132" width="0.1014%" height="15" fill="rgb(227,165,31)" fg:x="662" fg:w="1"/><text x="67.3900%" y="142.50"></text></g><g><title>approximate_elevation (pyefis/instruments/ai/VirtualVfr.py:923) (1 samples, 0.10%)</title><rect x="67.2414%" y="132" width="0.1014%" height="15" fill="rgb(228,167,24)" fg:x="663" fg:w="1"/><text x="67.4914%" y="142.50"></text></g><g><title>Distance (pyefis/instruments/ai/VirtualVfr.py:1033) (1 samples, 0.10%)</title><rect x="67.3428%" y="148" width="0.1014%" height="15" fill="rgb(228,143,12)" fg:x="664" fg:w="1"/><text x="67.5928%" y="158.50"></text></g><g><title>setLongitude (pyefis/instruments/ai/VirtualVfr.py:565) (3 samples, 0.30%)</title><rect x="67.2414%" y="100" width="0.3043%" height="15" fill="rgb(249,149,8)" fg:x="663" fg:w="3"/><text x="67.4914%" y="110.50"></text></g><g><title>update_position (pyefis/instruments/ai/VirtualVfr.py:757) (3 samples, 0.30%)</title><rect x="67.2414%" y="116" width="0.3043%" height="15" fill="rgb(243,35,44)" fg:x="663" fg:w="3"/><text x="67.4914%" y="126.50"></text></g><g><title>approximate_elevation (pyefis/instruments/ai/VirtualVfr.py:925) (2 samples, 0.20%)</title><rect x="67.3428%" y="132" width="0.2028%" height="15" fill="rgb(246,89,9)" fg:x="664" fg:w="2"/><text x="67.5928%" y="142.50"></text></g><g><title>Distance (pyefis/instruments/ai/VirtualVfr.py:1036) (1 samples, 0.10%)</title><rect x="67.4442%" y="148" width="0.1014%" height="15" fill="rgb(233,213,13)" fg:x="665" fg:w="1"/><text x="67.6942%" y="158.50"></text></g><g><title>render (pyefis/instruments/ai/VirtualVfr.py:941) (1 samples, 0.10%)</title><rect x="67.6471%" y="116" width="0.1014%" height="15" fill="rgb(233,141,41)" fg:x="667" fg:w="1"/><text x="67.8971%" y="126.50"></text></g><g><title>render (pyavtools/CIFPObjects.py:280) (1 samples, 0.10%)</title><rect x="67.6471%" y="132" width="0.1014%" height="15" fill="rgb(239,167,4)" fg:x="667" fg:w="1"/><text x="67.8971%" y="142.50"></text></g><g><title>point2D (pyefis/instruments/ai/VirtualVfr.py:963) (1 samples, 0.10%)</title><rect x="67.6471%" y="148" width="0.1014%" height="15" fill="rgb(209,217,16)" fg:x="667" fg:w="1"/><text x="67.8971%" y="158.50"></text></g><g><title>__init__ (pyavtools/Spatial.py:233) (1 samples, 0.10%)</title><rect x="67.6471%" y="164" width="0.1014%" height="15" fill="rgb(219,88,35)" fg:x="667" fg:w="1"/><text x="67.8971%" y="174.50"></text></g><g><title>point2D (pyefis/instruments/ai/VirtualVfr.py:961) (1 samples, 0.10%)</title><rect x="67.8499%" y="148" width="0.1014%" height="15" fill="rgb(220,193,23)" fg:x="669" fg:w="1"/><text x="68.0999%" y="158.50"></text></g><g><title>__init__ (pyavtools/Spatial.py:232) (1 samples, 0.10%)</title><rect x="68.0527%" y="164" width="0.1014%" height="15" fill="rgb(230,90,52)" fg:x="671" fg:w="1"/><text x="68.3027%" y="174.50"></text></g><g><title>__init__ (pyavtools/Spatial.py:174) (1 samples, 0.10%)</title><rect x="68.0527%" y="180" width="0.1014%" height="15" fill="rgb(252,106,19)" fg:x="671" fg:w="1"/><text x="68.3027%" y="190.50"></text></g><g><title>__init__ (pyavtools/Spatial.py:233) (1 samples, 0.10%)</title><rect x="68.1542%" y="164" width="0.1014%" height="15" fill="rgb(206,74,20)" fg:x="672" fg:w="1"/><text x="68.4042%" y="174.50"></text></g><g><title>point2D (pyefis/instruments/ai/VirtualVfr.py:963) (4 samples, 0.41%)</title><rect x="67.9513%" y="148" width="0.4057%" height="15" fill="rgb(230,138,44)" fg:x="670" fg:w="4"/><text x="68.2013%" y="158.50"></text></g><g><title>__init__ (pyavtools/Spatial.py:234) (1 samples, 0.10%)</title><rect x="68.2556%" y="164" width="0.1014%" height="15" fill="rgb(235,182,43)" fg:x="673" fg:w="1"/><text x="68.5056%" y="174.50"></text></g><g><title>sub (pyavtools/Spatial.py:86) (1 samples, 0.10%)</title><rect x="68.2556%" y="180" width="0.1014%" height="15" fill="rgb(242,16,51)" fg:x="673" fg:w="1"/><text x="68.5056%" y="190.50"></text></g><g><title>intersect (pyavtools/Spatial.py:271) (3 samples, 0.30%)</title><rect x="68.4584%" y="180" width="0.3043%" height="15" fill="rgb(248,9,4)" fg:x="675" fg:w="3"/><text x="68.7084%" y="190.50"></text></g><g><title>__init__ (pyavtools/Spatial.py:174) (1 samples, 0.10%)</title><rect x="68.6613%" y="196" width="0.1014%" height="15" fill="rgb(210,31,22)" fg:x="677" fg:w="1"/><text x="68.9113%" y="206.50"></text></g><g><title>__init__ (pyavtools/Spatial.py:35) (1 samples, 0.10%)</title><rect x="68.6613%" y="212" width="0.1014%" height="15" fill="rgb(239,54,39)" fg:x="677" fg:w="1"/><text x="68.9113%" y="222.50"></text></g><g><title>intersect (pyavtools/Spatial.py:273) (1 samples, 0.10%)</title><rect x="68.7627%" y="180" width="0.1014%" height="15" fill="rgb(230,99,41)" fg:x="678" fg:w="1"/><text x="69.0127%" y="190.50"></text></g><g><title>render (pyavtools/CIFPObjects.py:158) (12 samples, 1.22%)</title><rect x="67.7485%" y="132" width="1.2170%" height="15" fill="rgb(253,106,12)" fg:x="668" fg:w="12"/><text x="67.9985%" y="142.50"></text></g><g><title>point2D (pyefis/instruments/ai/VirtualVfr.py:965) (6 samples, 0.61%)</title><rect x="68.3570%" y="148" width="0.6085%" height="15" fill="rgb(213,46,41)" fg:x="674" fg:w="6"/><text x="68.6070%" y="158.50"></text></g><g><title>point2D (pyavtools/Spatial.py:313) (5 samples, 0.51%)</title><rect x="68.4584%" y="164" width="0.5071%" height="15" fill="rgb(215,133,35)" fg:x="675" fg:w="5"/><text x="68.7084%" y="174.50"></text></g><g><title>intersect (pyavtools/Spatial.py:274) (1 samples, 0.10%)</title><rect x="68.8641%" y="180" width="0.1014%" height="15" fill="rgb(213,28,5)" fg:x="679" fg:w="1"/><text x="69.1141%" y="190.50"></text></g><g><title>setLongitude (pyefis/instruments/ai/VirtualVfr.py:568) (16 samples, 1.62%)</title><rect x="67.5456%" y="100" width="1.6227%" height="15" fill="rgb(215,77,49)" fg:x="666" fg:w="16"/><text x="67.7956%" y="110.50"></text></g><g><title>render (pyefis/instruments/ai/VirtualVfr.py:949) (14 samples, 1.42%)</title><rect x="67.7485%" y="116" width="1.4199%" height="15" fill="rgb(248,100,22)" fg:x="668" fg:w="14"/><text x="67.9985%" y="126.50"></text></g><g><title>render (pyavtools/CIFPObjects.py:176) (2 samples, 0.20%)</title><rect x="68.9655%" y="132" width="0.2028%" height="15" fill="rgb(208,67,9)" fg:x="680" fg:w="2"/><text x="69.2155%" y="142.50"></text></g><g><title>render_airport (pyefis/instruments/ai/VirtualVfr.py:490) (2 samples, 0.20%)</title><rect x="68.9655%" y="148" width="0.2028%" height="15" fill="rgb(219,133,21)" fg:x="680" fg:w="2"/><text x="69.2155%" y="158.50"></text></g><g><title>get (overlay.py:37) (1 samples, 0.10%)</title><rect x="69.1684%" y="116" width="0.1014%" height="15" fill="rgb(246,46,29)" fg:x="682" fg:w="1"/><text x="69.4184%" y="126.50"></text></g><g><title>setValue (pyefis/instruments/gauges/abstract.py:217) (2 samples, 0.20%)</title><rect x="69.1684%" y="100" width="0.2028%" height="15" fill="rgb(246,185,52)" fg:x="682" fg:w="2"/><text x="69.4184%" y="110.50"></text></g><g><title>record_input (overlay.py:72) (1 samples, 0.10%)</title><rect x="69.2698%" y="116" width="0.1014%" height="15" fill="rgb(252,136,11)" fg:x="683" fg:w="1"/><text x="69.5198%" y="126.50"></text></g><g><title>setColors (pyefis/instruments/gauges/abstract.py:440) (2 samples, 0.20%)</title><rect x="69.3712%" y="116" width="0.2028%" height="15" fill="rgb(219,138,53)" fg:x="684" fg:w="2"/><text x="69.6212%" y="126.50"></text></g><g><title>setColors (pyefis/instruments/gauges/abstract.py:441) (2 samples, 0.20%)</title><rect x="69.5740%" y="116" width="0.2028%" height="15" fill="rgb(211,51,23)" fg:x="686" fg:w="2"/><text x="69.8240%" y="126.50"></text></g><g><title>setColors (pyefis/instruments/gauges/abstract.py:443) (1 samples, 0.10%)</title><rect x="69.7769%" y="116" width="0.1014%" height="15" fill="rgb(247,221,28)" fg:x="688" fg:w="1"/><text x="70.0269%" y="126.50"></text></g><g><title>setColors (pyefis/instruments/gauges/abstract.py:446) (1 samples, 0.10%)</title><rect x="69.8783%" y="116" width="0.1014%" height="15" fill="rgb(251,222,45)" fg:x="689" fg:w="1"/><text x="70.1283%" y="126.50"></text></g><g><title>_schedule_update (pyefis/instruments/gauges/abstract.py:175) (1 samples, 0.10%)</title><rect x="69.9797%" y="132" width="0.1014%" height="15" fill="rgb(217,162,53)" fg:x="690" fg:w="1"/><text x="70.2297%" y="142.50"></text></g><g><title>&lt;module&gt; (pyEfis.py:21) (692 samples, 70.18%)</title><rect x="0.0000%" y="68" width="70.1826%" height="15" fill="rgb(229,93,14)" fg:x="0" fg:w="692"/><text x="0.2500%" y="78.50">&lt;module&gt; (pyEfis.py:21)</text></g><g><title>main (pyefis/main.py:275) (692 samples, 70.18%)</title><rect x="0.0000%" y="84" width="70.1826%" height="15" fill="rgb(209,67,49)" fg:x="0" fg:w="692"/><text x="0.2500%" y="94.50">main (pyefis/main.py:275)</text></g><g><title>setValue (pyefis/instruments/gauges/abstract.py:238) (8 samples, 0.81%)</title><rect x="69.3712%" y="100" width="0.8114%" height="15" fill="rgb(213,87,29)" fg:x="684" fg:w="8"/><text x="69.6212%" y="110.50"></text></g><g><title>setColors (pyefis/instruments/gauges/abstract.py:462) (2 samples, 0.20%)</title><rect x="69.9797%" y="116" width="0.2028%" height="15" fill="rgb(205,151,52)" fg:x="690" fg:w="2"/><text x="70.2297%" y="126.50"></text></g><g><title>_schedule_update (pyefis/instruments/gauges/abstract.py:178) (1 samples, 0.10%)</title><rect x="70.0811%" y="132" width="0.1014%" height="15" fill="rgb(253,215,39)" fg:x="691" fg:w="1"/><text x="70.3311%" y="142.50"></text></g><g><title>run (pyavtools/fix/client.py:175) (90 samples, 9.13%)</title><rect x="70.1826%" y="100" width="9.1278%" height="15" fill="rgb(221,220,41)" fg:x="692" fg:w="90"/><text x="70.4326%" y="110.50">run (pyavtool..</text></g><g><title>handle_value (pyavtools/fix/client.py:102) (1 samples, 0.10%)</title><rect x="79.3103%" y="132" width="0.1014%" height="15" fill="rgb(218,133,21)" fg:x="782" fg:w="1"/><text x="79.5603%" y="142.50"></text></g><g><title>value (pyavtools/fix/__init__.py:144) (1 samples, 0.10%)</title><rect x="79.4118%" y="148" width="0.1014%" height="15" fill="rgb(221,193,43)" fg:x="783" fg:w="1"/><text x="79.6618%" y="158.50"></text></g><g><title>value (pyavtools/fix/__init__.py:160) (1 samples, 0.10%)</title><rect x="79.5132%" y="148" width="0.1014%" height="15" fill="rgb(240,128,52)" fg:x="784" fg:w="1"/><text x="79.7632%" y="158.50"></text></g><g><title>value (pyavtools/fix/__init__.py:163) (83 samples, 8.42%)</title><rect x="79.6146%" y="148" width="8.4178%" height="15" fill="rgb(253,114,12)" fg:x="785" fg:w="83"/><text x="79.8646%" y="158.50">value (pyavt..</text></g><g><title>handle_value (pyavtools/fix/client.py:105) (95 samples, 9.63%)</title><rect x="79.4118%" y="132" width="9.6349%" height="15" fill="rgb(215,223,47)" fg:x="783" fg:w="95"/><text x="79.6618%" y="142.50">handle_value (..</text></g><g><title>value (pyavtools/fix/__init__.py:167) (10 samples, 1.01%)</title><rect x="88.0325%" y="148" width="1.0142%" height="15" fill="rgb(248,225,23)" fg:x="868" fg:w="10"/><text x="88.2825%" y="158.50"></text></g><g><title>handle_value (pyavtools/fix/client.py:77) (1 samples, 0.10%)</title><rect x="89.0467%" y="132" width="0.1014%" height="15" fill="rgb(250,108,0)" fg:x="878" fg:w="1"/><text x="89.2967%" y="142.50"></text></g><g><title>get_item (pyavtools/fix/__init__.py:338) (1 samples, 0.10%)</title><rect x="89.0467%" y="148" width="0.1014%" height="15" fill="rgb(228,208,7)" fg:x="878" fg:w="1"/><text x="89.2967%" y="158.50"></text></g><g><title>wait (threading.py:619) (1 samples, 0.10%)</title><rect x="89.0467%" y="164" width="0.1014%" height="15" fill="rgb(244,45,10)" fg:x="878" fg:w="1"/><text x="89.2967%" y="174.50"></text></g><g><title>__enter__ (threading.py:265) (1 samples, 0.10%)</title><rect x="89.0467%" y="180" width="0.1014%" height="15" fill="rgb(207,125,25)" fg:x="878" fg:w="1"/><text x="89.2967%" y="190.50"></text></g><g><title>_bootstrap (threading.py:995) (188 samples, 19.07%)</title><rect x="70.1826%" y="68" width="19.0669%" height="15" fill="rgb(210,195,18)" fg:x="692" fg:w="188"/><text x="70.4326%" y="78.50">_bootstrap (threading.py:995)</text></g><g><title>_bootstrap_inner (threading.py:1038) (188 samples, 19.07%)</title><rect x="70.1826%" y="84" width="19.0669%" height="15" fill="rgb(249,80,12)" fg:x="692" fg:w="188"/><text x="70.4326%" y="94.50">_bootstrap_inner (threading.py..</text></g><g><title>run (pyavtools/fix/client.py:196) (98 samples, 9.94%)</title><rect x="79.3103%" y="100" width="9.9391%" height="15" fill="rgb(221,65,9)" fg:x="782" fg:w="98"/><text x="79.5603%" y="110.50">run (pyavtools..</text></g><g><title>handle_request (pyavtools/fix/client.py:149) (98 samples, 9.94%)</title><rect x="79.3103%" y="116" width="9.9391%" height="15" fill="rgb(235,49,36)" fg:x="782" fg:w="98"/><text x="79.5603%" y="126.50">handle_request..</text></g><g><title>handle_value (pyavtools/fix/client.py:79) (1 samples, 0.10%)</title><rect x="89.1481%" y="132" width="0.1014%" height="15" fill="rgb(225,32,20)" fg:x="879" fg:w="1"/><text x="89.3981%" y="142.50"></text></g><g><title>all (986 samples, 100%)</title><rect x="0.0000%" y="52" width="100.0000%" height="15" fill="rgb(215,141,46)" fg:x="0" fg:w="986"/><text x="0.2500%" y="62.50"></text></g><g><title>run (pyavtools/scheduler.py:67) (106 samples, 10.75%)</title><rect x="89.2495%" y="68" width="10.7505%" height="15" fill="rgb(250,160,47)" fg:x="880" fg:w="106"/><text x="89.4995%" y="78.50">run (pyavtools/s..</text></g></svg></svg>

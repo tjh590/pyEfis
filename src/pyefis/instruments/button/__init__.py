@@ -46,14 +46,15 @@ class Button(QWidget):
         self.font_mask = None
         self.font_size = None
         config = yaml.load(open(config_file), Loader=yaml.SafeLoader)
+        # Raw conditions from config; will be pre-compiled for efficiency.
         self._conditions = config.get('conditions', [])
         self.config = config
-        self._button = QPushButton(self) #self.config['text'], self)
+        self._button = QPushButton(self)  # self.config['text'], self)
         self._style = dict()
-        self._style['bg'] = QColor(self.config.get('bg_color',"lightgray"))
-        self._style['fg'] = QColor(self.config.get('fg_color',"black"))
-        self._style['transparent'] = self.config.get('transparent',False)
-        self._buttonhide = self.config.get("hover_show", False)
+        self._style['bg'] = QColor(self.config.get('bg_color', 'lightgray'))
+        self._style['fg'] = QColor(self.config.get('fg_color', 'black'))
+        self._style['transparent'] = self.config.get('transparent', False)
+        self._buttonhide = self.config.get('hover_show', False)
         self._title = ""
         self._toggle = False
         # Repalce {id} in the dbkey so we can have different 
@@ -93,11 +94,18 @@ class Button(QWidget):
         self._db = dict() #All the fix db items
         self._db_data = dict() #All the fix db data for use in pycond
         self.condition_keys = self.config.get('condition_keys', [])
+        self._conditions_timer = QTimer(self)
+        self._conditions_timer.setSingleShot(True)
+        self._conditions_timer.timeout.connect(self._executePendingConditions)
+        self._pending_clicked = False  # Whether any pending scheduled evaluation originated from a click/toggle.
+
         self.initDB()
+        self._compileConditionsOnce()
         self.setStyle('set text', self.config['text'])
         # On startup set button back to proper state
         self._button.setChecked(self._dbkey.value)
         self._dbkey.valueChanged[bool].connect(self.dbkeyChanged)
+        # Initial evaluation (visible state may still be False but we need first pass for text substitutions)
         self.processConditions()
 
     def enterEvent(self, QEvent):
@@ -136,23 +144,31 @@ class Button(QWidget):
         time.sleep(0.01)
 
     def dataChanged(self,key=None,signal=None):
+        """Slot for any FIX item change relevant to this button.
+
+        Previous implementation immediately re-parsed and evaluated all conditions.
+        We now only update the cached state and schedule a coalesced evaluation
+        (unless the button is hidden, in which case we skip entirely to reduce CPU).
+        """
         logger.debug(f"dataChanged key={key} signal={signal}")
-        if signal == 'value':
-            self._db_data[key] = self._db[key].value
-        elif signal == 'old':
-            self._db_data[f"{key}.old"] = self._db[key].old
-        elif signal == 'bad':
-            self._db_data[f"{key}.bad"] = self._db[key].bad
-        elif signal == 'fail':
-            self._db_data[f"{key}.fail"] = self._db[key].fail
-        elif signal == 'annunciate':
-            self._db_data[f"{key}.annunciate"] = self._db[key].annunciate
-        elif signal == 'aux':
-            for aux in self._db[key].aux:
-                self._db_data[f"{key}.aux.{aux}"] = self._db[key].aux[aux]
-        else:
-            pass
-        self.processConditions()
+        if key in self._db:
+            if signal == 'value':
+                self._db_data[key] = self._db[key].value
+            elif signal == 'old':
+                self._db_data[f"{key}.old"] = self._db[key].old
+            elif signal == 'bad':
+                self._db_data[f"{key}.bad"] = self._db[key].bad
+            elif signal == 'fail':
+                self._db_data[f"{key}.fail"] = self._db[key].fail
+            elif signal == 'annunciate':
+                self._db_data[f"{key}.annunciate"] = self._db[key].annunciate
+            elif signal == 'aux':
+                for aux in self._db[key].aux:
+                    self._db_data[f"{key}.aux.{aux}"] = self._db[key].aux[aux]
+        # If the button isn't visible, skip condition evaluation entirely to avoid hot path churn.
+        if not self.isVisible():
+            return
+        self._scheduleConditionsEvaluation(clicked=False)
 
     def resizeEvent(self,event):
         self._button.resize(self.width(), self.height())
@@ -183,6 +199,7 @@ class Button(QWidget):
                 fix.db.set_value(self._dbkey.key, self._button.isChecked())
                 self._dbkey.output_value()
             # Now we evaluate conditions and update the button style/text/state
+            # Immediate evaluation for user action
             self.processConditions(True)
 
         elif not self._toggle:
@@ -234,6 +251,34 @@ class Button(QWidget):
         if self._toggle: 
             self._button.setChecked(self._dbkey.value)
 
+    def _compileConditionsOnce(self):
+        """Pre-compile string 'when' conditions into callable form to avoid per-update parsing.
+
+        Stores compiled function in cond['_fn'].
+        """
+        for cond in self._conditions:
+            w = cond.get('when')
+            if isinstance(w, str) and '_fn' not in cond:
+                try:
+                    tokens = pc.tokenize(w, sep=' ', brkts='[]')
+                    expr = pc.to_struct(tokens)
+                    cond['_fn'] = pc.pycond(expr)
+                except Exception as e:
+                    logger.warning(f"Failed to pre-compile condition '{w}': {e}")
+
+    def _scheduleConditionsEvaluation(self, clicked=False):
+        """Coalesce rapid updates into a single evaluation using a short single-shot timer."""
+        # Preserve clicked flag if any pending evaluation originated from a click.
+        self._pending_clicked = self._pending_clicked or clicked
+        if not self._conditions_timer.isActive():
+            # 0 ms (next event loop iteration) keeps UI responsive while collapsing bursts.
+            self._conditions_timer.start(0)
+
+    def _executePendingConditions(self):
+        pc_flag = self._pending_clicked
+        self._pending_clicked = False
+        self.processConditions(clicked=pc_flag)
+
     def processConditions(self,clicked=False):
         self._db_data['SCREEN'] = self.parent.screenName
         self._db_data['CLICKED'] = clicked
@@ -243,8 +288,18 @@ class Button(QWidget):
         for cond in self._conditions:
             if 'when' in cond:
                 if type(cond['when']) == str:
-                    expr = pc.to_struct(pc.tokenize(cond['when'], sep=' ', brkts='[]'))
-                    if pc.pycond(expr)(state=self._db_data) == True:
+                    fn = cond.get('_fn')
+                    if fn is None:
+                        # Fallback for any condition added dynamically after init.
+                        try:
+                            tokens = pc.tokenize(cond['when'], sep=' ', brkts='[]')
+                            expr = pc.to_struct(tokens)
+                            fn = pc.pycond(expr)
+                            cond['_fn'] = fn
+                        except Exception as e:
+                            logger.warning(f"Dynamic compile failed for condition '{cond['when']}': {e}")
+                            continue
+                    if fn(state=self._db_data) is True:
                         self._db_data["PREVIOUS_CONDITION"] = True
                         logger.debug(f"{self.parent.parent.getRunningScreen()}:{self._dbkey.key}:{cond['when']} = True")
                         self.processActions(cond['actions'])

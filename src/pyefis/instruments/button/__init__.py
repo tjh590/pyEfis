@@ -57,6 +57,23 @@ class Button(QWidget):
         self._buttonhide = self.config.get('hover_show', False)
         self._title = ""
         self._toggle = False
+        # Style/eval diagnostics and caches
+        self._last_style = {
+            'bg': None,
+            'fg': None,
+            'transparent': None,
+            'border_size': None,
+            'font_size': None,
+            'enabled': None,
+            'checked': None,
+            'stylesheet_key': None,
+        }
+        self._diag_eval_total = 0
+        self._diag_eval_matched = 0
+        self._diag_eval_skipped = 0
+        self._diag_styles_applied = 0
+        self._diag_styles_noop = 0
+        self._diag_hmi_actions = 0
         # Repalce {id} in the dbkey so we can have different 
         # button names per node without having 
         # to duplicate all buttons.
@@ -98,6 +115,16 @@ class Button(QWidget):
         self._conditions_timer.setSingleShot(True)
         self._conditions_timer.timeout.connect(self._executePendingConditions)
         self._pending_clicked = False  # Whether any pending scheduled evaluation originated from a click/toggle.
+        # Allow configurable coalescing interval (ms). Default 0 = next event loop.
+        self._conditions_interval_ms = int(self.config.get('conditions_debounce_ms', 0))
+
+        # Optional periodic diagnostics logging if debug enabled
+        self._diag_timer = None
+        if logger.isEnabledFor(logging.DEBUG):
+            self._diag_timer = QTimer(self)
+            self._diag_timer.setInterval(1000)
+            self._diag_timer.timeout.connect(self._logDiagnostics)
+            self._diag_timer.start()
 
         self.initDB()
         self._compileConditionsOnce()
@@ -263,6 +290,19 @@ class Button(QWidget):
                     tokens = pc.tokenize(w, sep=' ', brkts='[]')
                     expr = pc.to_struct(tokens)
                     cond['_fn'] = pc.pycond(expr)
+                    # Build a dependency set by extracting token-like identifiers
+                    # This is a conservative regex; it will include names that look like KEY or KEY.suffix
+                    deps = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*", w))
+                    cond['_deps_exact'] = set()
+                    cond['_deps_prefix'] = set()
+                    for d in deps:
+                        if d.endswith('.'):
+                            cond['_deps_prefix'].add(d)
+                        elif d.endswith('.aux'):
+                            # Support aux prefix references like KEY.aux
+                            cond['_deps_prefix'].add(d + '.')
+                        else:
+                            cond['_deps_exact'].add(d)
                 except Exception as e:
                     logger.warning(f"Failed to pre-compile condition '{w}': {e}")
 
@@ -272,7 +312,7 @@ class Button(QWidget):
         self._pending_clicked = self._pending_clicked or clicked
         if not self._conditions_timer.isActive():
             # 0 ms (next event loop iteration) keeps UI responsive while collapsing bursts.
-            self._conditions_timer.start(0)
+            self._conditions_timer.start(self._conditions_interval_ms)
 
     def _executePendingConditions(self):
         pc_flag = self._pending_clicked
@@ -285,6 +325,7 @@ class Button(QWidget):
         self._db_data['DBKEY'] = self._dbkey.value 
         self._db_data["PREVIOUS_CONDITION"] = False
         logger.debug(f"{self._dbkey.key}:{self._dbkey.value}")
+        self._diag_eval_total += 1
         for cond in self._conditions:
             if 'when' in cond:
                 if type(cond['when']) == str:
@@ -296,10 +337,14 @@ class Button(QWidget):
                             expr = pc.to_struct(tokens)
                             fn = pc.pycond(expr)
                             cond['_fn'] = fn
+                            # minimal deps on dynamic add
+                            cond['_deps_exact'] = set()
+                            cond['_deps_prefix'] = set()
                         except Exception as e:
                             logger.warning(f"Dynamic compile failed for condition '{cond['when']}': {e}")
                             continue
                     if fn(state=self._db_data) is True:
+                        self._diag_eval_matched += 1
                         self._db_data["PREVIOUS_CONDITION"] = True
                         logger.debug(f"{self.parent.parent.getRunningScreen()}:{self._dbkey.key}:{cond['when']} = True")
                         self.processActions(cond['actions'])
@@ -330,11 +375,13 @@ class Button(QWidget):
             for action,args in act.items():
                 # Prevent recursive calls to self
                 with QSignalBlocker(self._dbkey):
-                    try:
+                    handler = hmi.actions.findAction(action)
+                    if handler is not None:
                         logger.debug(f"{self.parent.parent.getRunningScreen()}:{self._dbkey.key}:HMI:{action}:{args} Tried")
                         hmi.actions.trigger(action, args)
+                        self._diag_hmi_actions += 1
                         logger.debug(f"{self.parent.parent.getRunningScreen()}:{self._dbkey.key}:HMI:{action}:{args} Success")
-                    except:
+                    else:
                         self.setStyle(action,args)
                         logger.debug(f"{self.parent.parent.getRunningScreen()}:{self._dbkey.key}:STYLE:{action}:{args}")
 
@@ -348,15 +395,20 @@ class Button(QWidget):
             self.setTitle(args)
         elif action.lower() == 'button':
             if args.lower() == 'disable':
-              self._button.setEnabled(False)
+              if self._last_style['enabled'] is not False:
+                  self._button.setEnabled(False)
+                  self._last_style['enabled'] = False
             elif args.lower() == 'enable':
-              self._button.setEnabled(True)
+              if self._last_style['enabled'] is not True:
+                  self._button.setEnabled(True)
+                  self._last_style['enabled'] = True
             elif args.lower() == 'checked' and not self._button.isChecked():
                 self._button.blockSignals(True)
                 self._button.setChecked(True)
                 self._dbkey.value = True
                 self._dbkey.output_value()
                 self._button.blockSignals(False)
+                self._last_style['checked'] = True
 
             elif args.lower() == 'unchecked' and self._button.isChecked():
                 self._button.blockSignals(True)
@@ -364,20 +416,71 @@ class Button(QWidget):
                 self._dbkey.value = False
                 self._dbkey.output_value()
                 self._button.blockSignals(False)
+                self._last_style['checked'] = False
 
-        self._style['border_size'] = qRound(self._button.height() * 6/100)
+
+        # Compute border size
+        border_size = qRound(self._button.height() * 6/100)
+        self._style['border_size'] = border_size
+        # Prepare font; calculate only when mask present and size unknown
         self.font = QFont(self.font_family)
         if self.font_mask:
             if not self.font_size:
-                self.font_size = helpers.fit_to_mask(self.width()-(self._style['border_size']*2.5),self.height()-(self._style['border_size']*2.5),self.font_mask,self.font_family)
+                self.font_size = helpers.fit_to_mask(
+                    self.width() - (border_size*2.5),
+                    self.height() - (border_size*2.5),
+                    self.font_mask,
+                    self.font_family,
+                )
             self.font.setPointSizeF(self.font_size)
         else:
-            self.font.setPixelSize(qRound(self.height() * 38/100))
+            desired_px = qRound(self.height() * 38/100)
+            if self._last_style['font_size'] != desired_px:
+                self.font.setPixelSize(desired_px)
+                self._last_style['font_size'] = desired_px
+            else:
+                # Reuse previous font size
+                self.font.setPixelSize(self._last_style['font_size'])
         bg_color = self._style.get('bg_override', None) or self._style['bg']
-        if self._style['transparent']:
-            self._button.setStyleSheet(f"QPushButton {{border: 1px solid {bg_color.name()}; background: transparent;border-radius: 6px}}")# border-style: outset; border-width: {self._style['border_size']}px;color:{self._style['fg'].name()}}} QPushButton:pressed {{background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {self._style['bg'].name()}, stop: 1 {self._style['bg'].lighter(110).name()});border-style:inset}} QPushButton:checked {{background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {self._style['bg'].name()}, stop: 1 {self._style['bg'].lighter(110).name()});border-style:inset}}")
+        # Create a small stylesheet key to detect no-ops
+        ss_key = (
+            bg_color.name(),
+            self._style['fg'].name(),
+            self._style['transparent'],
+            border_size,
+        )
+        if ss_key != self._last_style['stylesheet_key']:
+            if self._style['transparent']:
+                self._button.setStyleSheet(
+                    f"QPushButton {{border: 1px solid {bg_color.name()}; background: transparent;border-radius: 6px}}"
+                )
+            else:
+                self._button.setStyleSheet(
+                    f"QPushButton {{border: 2px solid {bg_color.darker(150).name()};border-radius: 10%; background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {bg_color.lighter(130).name()}, stop: 1 {bg_color.name()});border-style: outset; border-width: {border_size}px;color:{self._style['fg'].name()}}} "
+                    f"QPushButton:pressed {{background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {bg_color.name()}, stop: 1 {bg_color.lighter(190).name()});border-style:inset}} "
+                    f"QPushButton:checked {{background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {bg_color.name()}, stop: 1 {bg_color.lighter(190).name()});border-style:inset}}"
+                )
+            self._last_style['stylesheet_key'] = ss_key
+            self._last_style['bg'] = bg_color.name()
+            self._last_style['fg'] = self._style['fg'].name()
+            self._last_style['transparent'] = self._style['transparent']
+            self._last_style['border_size'] = border_size
+            self._diag_styles_applied += 1
         else:
-            self._button.setStyleSheet(f"QPushButton {{border: 2px solid {bg_color.darker(150).name()};border-radius: 10%; background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {bg_color.lighter(130).name()}, stop: 1 {bg_color.name()});border-style: outset; border-width: {self._style['border_size']}px;color:{self._style['fg'].name()}}} QPushButton:pressed {{background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {bg_color.name()}, stop: 1 {bg_color.lighter(190).name()});border-style:inset}} QPushButton:checked {{background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 {bg_color.name()}, stop: 1 {bg_color.lighter(190).name()});border-style:inset}}")
+            self._diag_styles_noop += 1
+        # Apply font only if it differs
+        self._button.setFont(self.font)
+
+    def _logDiagnostics(self):
+        logger.debug(
+            f"ButtonDiag title='{self._title}' key='{self._dbkey.key}': eval_total={self._diag_eval_total} matched={self._diag_eval_matched} "
+            f"styles_applied={self._diag_styles_applied} styles_noop={self._diag_styles_noop} hmi_actions={self._diag_hmi_actions}"
+        )
+        self._diag_eval_total = 0
+        self._diag_eval_matched = 0
+        self._diag_styles_applied = 0
+        self._diag_styles_noop = 0
+        self._diag_hmi_actions = 0
 
         self._button.setFont(self.font)
 

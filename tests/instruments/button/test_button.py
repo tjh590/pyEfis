@@ -37,8 +37,17 @@ def test_simple_button(fix,mock_parent_widget,qtbot):
     assert widget.config['dbkey'] == 'TSBTN{id}0'
     assert widget._toggle == False
     assert widget._button.isCheckable() == False
-    fix.db.get_item("HIDEBUTTON").value = True
-    assert widget._title == "Show\nMenu"
+    assert widget.isVisible() == True
+    #fix.db.get_item("HIDEBUTTON").value = True
+    #assert widget._title == "Show\nMenu"
+    fix.db.set_value("HIDEBUTTON", True)
+    #qtbot.wait(1000)
+    qtbot.waitUntil(lambda: widget._button.text() == "Show\nMenu", timeout=1000)
+    #print("DEBUG title after wait:", widget.getTitle())
+    #fix.db.get_item("HIDEBUTTON").output_value()
+    #qtbot.waitUntil(lambda: widget.getTitle() == "Show\nMenu", timeout=1000)
+    #qtbot.waitUntil(lambda: widget._button.text() == "Units", timeout=1000)
+
     qtbot.mouseClick(widget._button, Qt.MouseButton.LeftButton)
     assert widget._title == "Units"
     with qtbot.waitSignal(hmi.actions.setInstUnits, timeout=2000):

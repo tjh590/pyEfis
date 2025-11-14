@@ -177,7 +177,7 @@ class Button(QWidget):
         We now only update the cached state and schedule a coalesced evaluation
         (unless the button is hidden, in which case we skip entirely to reduce CPU).
         """
-        logger.debug(f"dataChanged key={key} signal={signal}")
+        logger.warning(f"dataChanged key={key} signal={signal}")
         if key in self._db:
             if signal == 'value':
                 self._db_data[key] = self._db[key].value
@@ -285,9 +285,20 @@ class Button(QWidget):
         """
         for cond in self._conditions:
             w = cond.get('when')
+            logger.warning(f"Compiling condition: {w}")
             if isinstance(w, str) and '_fn' not in cond:
                 try:
+                    # Normalization: if the entire expression is a single quoted identifier
+                    # (e.g., "HIDEBUTTON" or 'HIDEBUTTON'), strip the quotes so it is
+                    # interpreted as the variable HIDEBUTTON rather than a string literal.
+                    m = re.match(r"^\s*([\"'])([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\1\s*$", w)
+                    logger.warning(f"Normalizing condition: {m}")
+                    if m:
+                        w = m.group(2)
+                        cond['when'] = w
+                        logger.warning(f"Condition normalized from quoted to unquoted identifier: '{cond['when']}'")
                     tokens = pc.tokenize(w, sep=' ', brkts='[]')
+                    logger.warning(f"Compiling condition tokens: {tokens}")
                     expr = pc.to_struct(tokens)
                     cond['_fn'] = pc.pycond(expr)
                     # Build a dependency set by extracting token-like identifiers
@@ -315,6 +326,7 @@ class Button(QWidget):
             self._conditions_timer.start(self._conditions_interval_ms)
 
     def _executePendingConditions(self):
+        logger.warning(f"_executePendingConditions")
         pc_flag = self._pending_clicked
         self._pending_clicked = False
         self.processConditions(clicked=pc_flag)
@@ -333,7 +345,14 @@ class Button(QWidget):
                     if fn is None:
                         # Fallback for any condition added dynamically after init.
                         try:
-                            tokens = pc.tokenize(cond['when'], sep=' ', brkts='[]')
+                            wdyn = cond['when']
+                            # Apply the same normalization as compile-once: if the entire
+                            # expression is a single quoted identifier, strip the quotes.
+                            m = re.match(r"^\s*([\"'])([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\1\s*$", wdyn)
+                            if m:
+                                wdyn = m.group(2)
+                                cond['when'] = wdyn
+                            tokens = pc.tokenize(wdyn, sep=' ', brkts='[]')
                             expr = pc.to_struct(tokens)
                             fn = pc.pycond(expr)
                             cond['_fn'] = fn

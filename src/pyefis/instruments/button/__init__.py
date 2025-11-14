@@ -177,7 +177,7 @@ class Button(QWidget):
         We now only update the cached state and schedule a coalesced evaluation
         (unless the button is hidden, in which case we skip entirely to reduce CPU).
         """
-        logger.warning(f"dataChanged key={key} signal={signal}")
+        logger.debug(f"dataChanged key={key} signal={signal}")
         if key in self._db:
             if signal == 'value':
                 self._db_data[key] = self._db[key].value
@@ -285,20 +285,25 @@ class Button(QWidget):
         """
         for cond in self._conditions:
             w = cond.get('when')
-            logger.warning(f"Compiling condition: {w}")
+            logger.debug(f"Compiling condition: {w}")
             if isinstance(w, str) and '_fn' not in cond:
                 try:
                     # Normalization: if the entire expression is a single quoted identifier
                     # (e.g., "HIDEBUTTON" or 'HIDEBUTTON'), strip the quotes so it is
                     # interpreted as the variable HIDEBUTTON rather than a string literal.
                     m = re.match(r"^\s*([\"'])([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)\1\s*$", w)
-                    logger.warning(f"Normalizing condition: {m}")
+                    logger.debug(f"Normalizing condition: {m}")
                     if m:
                         w = m.group(2)
                         cond['when'] = w
-                        logger.warning(f"Condition normalized from quoted to unquoted identifier: '{cond['when']}'")
+                        logger.debug(f"Condition normalized from quoted to unquoted identifier: '{cond['when']}'")
                     tokens = pc.tokenize(w, sep=' ', brkts='[]')
-                    logger.warning(f"Compiling condition tokens: {tokens}")
+                    # Normalize Python-style booleans to pycond booleans
+                    tokens = [
+                        'true' if t == 'True' else 'false' if t == 'False' else t
+                        for t in tokens
+                    ]
+                    logger.debug(f"Compiling condition tokens: {tokens}")
                     expr = pc.to_struct(tokens)
                     cond['_fn'] = pc.pycond(expr)
                     # Build a dependency set by extracting token-like identifiers
@@ -319,14 +324,22 @@ class Button(QWidget):
 
     def _scheduleConditionsEvaluation(self, clicked=False):
         """Coalesce rapid updates into a single evaluation using a short single-shot timer."""
+        # If debounce interval is 0, evaluate immediately to preserve deterministic behavior
+        # and avoid races introduced by event-loop deferral.
+        if self._conditions_interval_ms == 0:
+            flag = self._pending_clicked or clicked
+            self._pending_clicked = False
+            self.processConditions(clicked=flag)
+            return
+
         # Preserve clicked flag if any pending evaluation originated from a click.
         self._pending_clicked = self._pending_clicked or clicked
         if not self._conditions_timer.isActive():
-            # 0 ms (next event loop iteration) keeps UI responsive while collapsing bursts.
+            # Start timer with configured debounce interval (ms)
             self._conditions_timer.start(self._conditions_interval_ms)
 
     def _executePendingConditions(self):
-        logger.warning(f"_executePendingConditions")
+        logger.debug(f"_executePendingConditions")
         pc_flag = self._pending_clicked
         self._pending_clicked = False
         self.processConditions(clicked=pc_flag)
@@ -335,6 +348,10 @@ class Button(QWidget):
         self._db_data['SCREEN'] = self.parent.screenName
         self._db_data['CLICKED'] = clicked
         self._db_data['DBKEY'] = self._dbkey.value 
+        # Provide boolean literals for expressions that use 'True'/'False' tokens
+        # so that conditions like "CLICKED eq True" evaluate as expected.
+        self._db_data['True'] = True
+        self._db_data['False'] = False
         self._db_data["PREVIOUS_CONDITION"] = False
         logger.debug(f"{self._dbkey.key}:{self._dbkey.value}")
         self._diag_eval_total += 1
@@ -353,6 +370,10 @@ class Button(QWidget):
                                 wdyn = m.group(2)
                                 cond['when'] = wdyn
                             tokens = pc.tokenize(wdyn, sep=' ', brkts='[]')
+                            tokens = [
+                                'true' if t == 'True' else 'false' if t == 'False' else t
+                                for t in tokens
+                            ]
                             expr = pc.to_struct(tokens)
                             fn = pc.pycond(expr)
                             cond['_fn'] = fn
@@ -363,6 +384,7 @@ class Button(QWidget):
                             logger.warning(f"Dynamic compile failed for condition '{cond['when']}': {e}")
                             continue
                     if fn(state=self._db_data) is True:
+                        logger.debug(f"COND MATCH when='{cond['when']}' CLICKED={self._db_data.get('CLICKED')} HIDEBUTTON={self._db_data.get('HIDEBUTTON')}")
                         self._diag_eval_matched += 1
                         self._db_data["PREVIOUS_CONDITION"] = True
                         logger.debug(f"{self.parent.parent.getRunningScreen()}:{self._dbkey.key}:{cond['when']} = True")

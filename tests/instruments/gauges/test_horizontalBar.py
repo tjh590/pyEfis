@@ -1,10 +1,8 @@
 import pytest
-from unittest import mock
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt, qRound
-from PyQt6.QtGui import QColor, QBrush, QPen, QFont, QPaintEvent, QFontMetrics
-from pyefis.instruments import gauges
-import pyefis.hmi as hmi
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QPen, QFont
+from pyefis.instruments.gauges.horizontalBar import HorizontalBar
 from tests.utils import track_calls
 
 
@@ -17,7 +15,7 @@ def app(qtbot):
 
 
 def test_horizontal_bar_gauge(fix, qtbot):
-    widget = gauges.HorizontalBar()
+    widget = HorizontalBar()
     assert widget.getRatio() == 2
     widget.setDbkey("NUM")
     widget.setupGauge()
@@ -26,6 +24,7 @@ def test_horizontal_bar_gauge(fix, qtbot):
     widget.show()
     qtbot.waitExposed(widget)
     widget.resizeEvent(None)
+    # Font sizing behavior
     with track_calls(QFont, ["setPointSizeF", "setPixelSize"]) as tracker:
         widget.resizeEvent(None)
         assert tracker.was_not_called("setPointSizeF")
@@ -37,35 +36,46 @@ def test_horizontal_bar_gauge(fix, qtbot):
     widget.units_font_mask = "0000"
     widget.resizeEvent(None)
 
-    with track_calls(QColor, "setAlpha") as tracker:
+    # Ghost name alpha application
+    widget.name = "TEST"
+    with track_calls(type(widget.textColor), "setAlpha") as tracker:
         widget.name_font_ghost_mask = "0000"
-        widget.paintEvent(None)
+        widget.update()
+        qtbot.wait(50)
         assert tracker.was_called_with("setAlpha", widget.font_ghost_alpha)
 
+    # Ghost units alpha application
     widget.show_units = True
     widget.name_font_ghost_mask = None
     widget.name_font_mask = None
     widget.font_mask = None
-    with track_calls(QColor, "setAlpha") as tracker:
-        widget.paintEvent(None)
+    with track_calls(type(widget.textColor), "setAlpha") as tracker:
+        widget.update()
+        qtbot.wait(50)
         assert tracker.was_not_called("setAlpha")
         widget.units_font_ghost_mask = "0000"
-        widget.paintEvent(None)
+        widget.update()
+        qtbot.wait(50)
         assert tracker.was_called_with("setAlpha", widget.font_ghost_alpha)
 
+    # Ghost value alpha application
     widget.units_font_ghost_mask = None
-    with track_calls(QColor, "setAlpha") as tracker:
-        widget.paintEvent(None)
+    with track_calls(type(widget.valueColor), "setAlpha") as tracker:
+        widget.update()
+        qtbot.wait(50)
         assert tracker.was_not_called("setAlpha")
         widget.font_ghost_mask = "0000"
-        widget.paintEvent(None)
+        widget.update()
+        qtbot.wait(50)
         assert tracker.was_called_with("setAlpha", widget.font_ghost_alpha)
+
+    # Segments drawing color
     widget.setDbkey("NUMOK")
     widget.setupGauge()
-    widget.paintEvent(None)
-
+    widget.update()
+    qtbot.wait(50)
     widget.segments = 28
     with track_calls(QPen, "setColor") as tracker:
-        widget.paintEvent(None)
-
-    assert tracker.was_called_with("setColor", QColor(Qt.GlobalColor.black))
+        widget.update()
+        qtbot.wait(50)
+        assert tracker.was_called_with("setColor", QColor(Qt.GlobalColor.black))

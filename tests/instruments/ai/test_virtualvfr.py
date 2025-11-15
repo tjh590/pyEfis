@@ -1,4 +1,5 @@
 import pytest
+import os
 from unittest import mock
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import Qt, qRound
@@ -17,10 +18,30 @@ def app(qtbot):
 
 
 def test_virtual_VFR(fix,qtbot):
+    # Ordered fallback lists
+    dbpath_candidates = ["/path", "/CIFP"]
+    indexpath_candidates = ["/indexpath", "/CIFP"]
+
+    def first_existing(candidates):
+        for c in candidates:
+            if os.path.exists(os.path.expanduser(c)):
+                return c
+        # If none exist, just return the first so instrument still initializes
+        return candidates[0]
+
+    # Resolve candidates now (simulate runtime fallback)
+    resolved_dbpath = first_existing(dbpath_candidates)
+    resolved_indexpath = first_existing(indexpath_candidates)
+
     def data_values(arg):
-        if   arg == 'metadata': return None
-        elif arg == 'dbpath': return "/path"
-        elif arg == 'indexpath': return "/indexpath"
+        if arg == 'metadata':
+            return None
+        elif arg == 'dbpath':
+            return resolved_dbpath
+        elif arg == 'indexpath':
+            return resolved_indexpath
+        elif arg == 'refresh_period':
+            return 0.1
         return None
 
     widget = VirtualVfr()
@@ -30,4 +51,5 @@ def test_virtual_VFR(fix,qtbot):
     widget.resize(200,200)
     widget.show()
     qtbot.waitExposed(widget)
-    qtbot.wait(3000)
+    # Allow some time for POV init/render; shorter than original 3000ms while sufficient
+    qtbot.wait(500)

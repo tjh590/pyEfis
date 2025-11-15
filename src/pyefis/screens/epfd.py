@@ -26,8 +26,8 @@ from pyefis.instruments import hsi
 from pyefis.instruments import airspeed
 from pyefis.instruments import altimeter
 from pyefis.instruments import vsi
-from pyefis.instruments import tc
 from pyefis.instruments import gauges
+from pyefis.instruments import Runway_Approach
 
 class Screen(QWidget):
     def __init__(self, parent=None):
@@ -66,6 +66,13 @@ class Screen(QWidget):
         self.check_engine = CheckEngine(self)
         #self.tc = tc.TurnCoordinator(self, dial=False)
 
+        self.runway_approach = Runway_Approach(self)
+        self.runway_approach.rows = 3
+        self.runway_approach.cols = 3
+        self.runway_approach.refresh_hz = 10
+        self.runway_approach.airport_key = "current_airport_ID"
+        self.runway_approach.maxoffset_ft = 500
+
     def resizeEvent(self, event):
         instWidth = self.width()
         instHeight = self.height()
@@ -99,6 +106,9 @@ class Screen(QWidget):
         engine_items = self.get_config_item("check_engine")
         if engine_items is not None and len(engine_items) > 0:
             self.check_engine.init_fix_items(engine_items)
+
+        self.runway_approach.resize(instWidth, instHeight)
+        self.runway_approach.move(0, 0)
 
     def change_asd_mode(self, event):
         self.asd_Box.setMode(self.asd_Box.getMode() + 1)

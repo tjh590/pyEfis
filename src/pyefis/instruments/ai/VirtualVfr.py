@@ -116,6 +116,8 @@ class VirtualVfr(AI):
         t.setFont (minfont)
         self.min_font_width = t.boundingRect().width()
         self.pov = None
+        # Coalesced rendering: batch rapid updates to a steady refresh cadence
+        self._renderTimer = None
 
     def resizeEvent(self, event):
         super(VirtualVfr, self).resizeEvent(event)
@@ -190,8 +192,22 @@ class VirtualVfr(AI):
             self.alt_item.failChanged[bool].connect(self.setAltFail)
             self._connections_made = True
 
+        # Initialize and start timer-driven rendering loop after POV is ready
+        if self._renderTimer is None:
+            self._renderTimer = QTimer(self)
+            self._renderTimer.setTimerType(Qt.TimerType.PreciseTimer)
+            # Derive interval from POV refresh period, clamp to sensible bounds
+            interval_ms = max(16, int((self.pov.refresh_period or 0.033) * 1000))
+            self._renderTimer.setInterval(interval_ms)
+            self._renderTimer.timeout.connect(self._onRenderTick)
+            self._renderTimer.start()
+
+        # Do an initial render so the screen is not blank before the first tick
         if not self.rendering_prohibited():
+            need_update = self.pov.do_render
             self.pov.render(self)
+            if need_update and self.isVisible():
+                self.update()
 
     def get_largest_font_size(self, width):
         max_size = self.height() * 0.08 #25
@@ -552,40 +568,23 @@ class VirtualVfr(AI):
         self.missing_lat = False
         #print ("New latitude %f"%self.lat)
         self.pov.update_position (self.lat, self.lng)
-        if not self.rendering_prohibited():
-            need_update = self.pov.do_render
-            self.pov.render(self)
-            if need_update and self.isVisible():
-                self.update()
+        # Rendering is coalesced on timer tick
 
     def setLongitude(self, lng):
         self.lng = lng
         self.missing_lng = False
         #print ("New longitude %f"%self.lng)
         self.pov.update_position (self.lat, self.lng)
-        if not self.rendering_prohibited():
-            need_update = self.pov.do_render
-            self.pov.render(self)
-            if need_update and self.isVisible():
-                self.update()
+        # Rendering is coalesced on timer tick
 
     def setAltitude(self, alt):
         self.altitude = alt
         self.pov.update_altitude (alt)
         self.pov.update_position (self.lat, self.lng)
-        if not self.rendering_prohibited():
-            need_update = self.pov.do_render
-            self.pov.render(self)
-            if need_update and self.isVisible():
-                self.update()
+        # Rendering is coalesced on timer tick
     def setHeading(self, heading):
         self.pov.update_heading (heading)
-        if not self.rendering_prohibited():
-            #log.debug("Rendering")
-            need_update = self.pov.do_render
-            self.pov.render(self)
-            if need_update and self.isVisible():
-                self.update()
+        # Rendering is coalesced on timer tick
 
     def getVfrBad(self):
         #print(self._VFRBad)
@@ -695,7 +694,7 @@ class VirtualVfr(AI):
 
     def setBlank(self, b):
         if self.rendering_prohibited() and len(self.display_objects) > 0:
-            for key in self.display_objects.keys():
+            for key in list(self.display_objects.keys()):
                 # The lights seem to be stored in a list 
                 if isinstance(self.display_objects[key],list):
                     for delobj in self.display_objects[key]:
@@ -703,6 +702,15 @@ class VirtualVfr(AI):
                 else:
                     self.scene.removeItem(self.display_objects[key])
             self.display_objects = dict()
+
+    def _onRenderTick(self):
+        # Called at a steady cadence to coalesce frequent input changes into one render
+        if self.rendering_prohibited():
+            return
+        need_update = self.pov.do_render
+        self.pov.render(self)
+        if need_update and self.isVisible():
+            self.update()
 
 VIEWPORT_ANGLE100 = 35.0 / 2.0 * RAD_DEG
 

@@ -10,8 +10,8 @@ from PyQt6.QtGui import QPainter, QPen, QColor, QFont
 from PyQt6.QtCore import Qt, QRectF
 
 # ===== ADJUSTABLE CONSTANTS =====
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 600
+WINDOW_WIDTH = 3840
+WINDOW_HEIGHT = 2160
 
 # Bar configuration
 BAR_COUNT = 6  # Number of bars to display side by side
@@ -146,14 +146,14 @@ class VerticalBarTest(QWidget):
         highAlarmPixel = self._calculateThresholdPixel(HIGH_ALARM, barTop, barBottom) if HIGH_ALARM and HIGH_ALARM <= HIGH_RANGE else None
         
         # Print debug info for first bar
-        if barLabel == "BAR1":
-            print(f"\n=== {barLabel} Debug ===")
-            print(f"  Widget height: {widgetHeight}")
-            print(f"  Small font size: {smallFont}, Big font size: {bigFont}")
-            print(f"  Bar dimensions: top={barTop}, bottom={barBottom}, left={barLeft}, width={barWidth}, height={barBottom-barTop}")
-            print(f"  Range: {LOW_RANGE} to {HIGH_RANGE}")
-            print(f"  Thresholds: lowAlarm={LOW_ALARM}, lowWarn={LOW_WARN}, highWarn={HIGH_WARN}, highAlarm={HIGH_ALARM}")
-            print(f"  Threshold pixels: lowAlarm={lowAlarmPixel}, lowWarn={lowWarnPixel}, highWarn={highWarnPixel}, highAlarm={highAlarmPixel}")
+        # if barLabel == "BAR1":
+        #     print(f"\n=== {barLabel} Debug ===")
+        #     print(f"  Widget height: {widgetHeight}")
+        #     print(f"  Small font size: {smallFont}, Big font size: {bigFont}")
+        #     print(f"  Bar dimensions: top={barTop}, bottom={barBottom}, left={barLeft}, width={barWidth}, height={barBottom-barTop}")
+        #     print(f"  Range: {LOW_RANGE} to {HIGH_RANGE}")
+        #     print(f"  Thresholds: lowAlarm={LOW_ALARM}, lowWarn={LOW_WARN}, highWarn={HIGH_WARN}, highAlarm={HIGH_ALARM}")
+        #     print(f"  Threshold pixels: lowAlarm={lowAlarmPixel}, lowWarn={lowWarnPixel}, highWarn={highWarnPixel}, highAlarm={highAlarmPixel}")
         
         # Print comparison for other bars
         if barIndex > 0:

@@ -1,0 +1,27 @@
+outDir: extras/extras/test_results
+scenarios:
+  - name: vertical_safe
+    class: pyefis.instruments.gauges.VerticalBarSimple
+    size: { w: 180, h: 240 }
+    thresholds: { lowAlarm: 50, lowWarn: 85, highWarn: 200, highAlarm: 230, lowRange: 0, highRange: 300 }
+    value: 150
+  - name: vertical_high_warn
+    class: pyefis.instruments.gauges.VerticalBarSimple
+    size: { w: 180, h: 240 }
+    thresholds: { lowAlarm: 50, lowWarn: 85, highWarn: 200, highAlarm: 230, lowRange: 0, highRange: 300 }
+    value: 205
+  - name: vertical_high_alarm
+    class: pyefis.instruments.gauges.VerticalBarSimple
+    size: { w: 180, h: 240 }
+    thresholds: { lowAlarm: 50, lowWarn: 85, highWarn: 200, highAlarm: 230, lowRange: 0, highRange: 300 }
+    value: 240
+  - name: horizontal_low_warn
+    class: pyefis.instruments.gauges.HorizontalBarSimple
+    size: { w: 300, h: 160 }
+    thresholds: { lowAlarm: 50, lowWarn: 85, highWarn: 200, highAlarm: 230, lowRange: 0, highRange: 300 }
+    value: 80
+  - name: horizontal_high_warn
+    class: pyefis.instruments.gauges.HorizontalBarSimple
+    size: { w: 300, h: 160 }
+    thresholds: { lowAlarm: 50, lowWarn: 85, highWarn: 200, highAlarm: 230, lowRange: 0, highRange: 300 }
+    value: 210

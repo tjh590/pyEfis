@@ -15,7 +15,7 @@ from PyQt6.QtGui import *
 from PyQt6.QtCore import *
 from PyQt6.QtWidgets import *
 
-from .horizontalBar import HorizontalBar as HorizontalBarBase
+from .horizontalBarImproved import HorizontalBarImproved as HorizontalBarBase
 
 
 class HorizontalBarSimple(HorizontalBarBase):
@@ -40,31 +40,20 @@ class HorizontalBarSimple(HorizontalBarBase):
             return  # Ignore any attempts to set segments
         super().__setattr__(name, value)
     
-    def _getBarColor(self):
+    def _current_zone(self):
+        """Return one of: 'low_alarm', 'low_warn', 'safe', 'high_warn', 'high_alarm'.
+        Thresholds can be None and are treated as absent boundaries.
         """
-        Determine the bar color based on current value and thresholds.
-        Returns the appropriate color (safe, warn, or alarm).
-        """
-        value = self._value
-        
-        # Check high alarm
-        if self.highAlarm is not None and value >= self.highAlarm:
-            return self.alarmColor
-        
-        # Check high warning
-        if self.highWarn is not None and value >= self.highWarn:
-            return self.warnColor
-        
-        # Check low alarm
-        if self.lowAlarm is not None and value <= self.lowAlarm:
-            return self.alarmColor
-        
-        # Check low warning
-        if self.lowWarn is not None and value <= self.lowWarn:
-            return self.warnColor
-        
-        # Default to safe color
-        return self.safeColor
+        v = self._value
+        if self.highAlarm is not None and v >= self.highAlarm:
+            return 'high_alarm'
+        if self.lowAlarm is not None and v <= self.lowAlarm:
+            return 'low_alarm'
+        if self.highWarn is not None and v >= self.highWarn:
+            return 'high_warn'
+        if self.lowWarn is not None and v <= self.lowWarn:
+            return 'low_warn'
+        return 'safe'
     
     def paintEvent(self, event):
         # Check highlight status
@@ -81,99 +70,139 @@ class HorizontalBarSimple(HorizontalBarBase):
         pen.setWidth(1)
         pen.setCapStyle(Qt.PenCapStyle.FlatCap)
         p.setPen(pen)
+        # Ensure geometry reflects late-applied flags
+        try:
+            self._recompute_geometry()
+        except Exception:
+            pass
         
-        # Draw name
-        opt = QTextOption(Qt.AlignmentFlag.AlignCenter)
-        if self.show_name:
+        # Top row: name/dbkey + units combined (like HorizontalBarImproved)
+        top_rect = QRectF(self.nameTextRect)
+        fitted_font, (name_text, units_text, spacer, name_w) = self._get_top_layout()
+        p.setFont(fitted_font)
+        pen.setColor(self.textColor)
+        p.setPen(pen)
+        if name_text:
+            opt_left = QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             if self.name_font_ghost_mask:
-                opt = QTextOption(Qt.AlignmentFlag.AlignLeft)
                 alpha = self.textColor.alpha()
                 self.textColor.setAlpha(self.font_ghost_alpha)
                 pen.setColor(self.textColor)
                 p.setPen(pen)
-                p.setFont(self.smallFont)
-                p.drawText(self.nameTextRect, self.name_font_ghost_mask, opt)
+                p.drawText(top_rect, self.name_font_ghost_mask, opt_left)
                 self.textColor.setAlpha(alpha)
-            pen.setColor(self.textColor)
-            p.setPen(pen)
-            p.setFont(self.smallFont)
-            p.drawText(self.nameTextRect, self.name, opt)
-        
-        # Draw value
-        if self.show_value:
-            if self.peakMode:
-                dv = self.value - self.peakValue
-                if dv <= -10:
-                    pen.setColor(self.peakColor)
-                    p.setFont(self.bigFont)
-                    p.setPen(pen)
-                    p.drawText(self.valueTextRect, str(round(dv)), opt)
-                else:
-                    self.drawValue(p, pen)
-            else:
-                self.drawValue(p, pen)
-
-        # Draw units
-        opt = QTextOption(Qt.AlignmentFlag.AlignCenter)
-        pen.setColor(self.textColor)
-        p.setPen(pen)
-        if self.show_units:
-            if self.units_font_mask:
-                opt = QTextOption(Qt.AlignmentFlag.AlignRight)
-                p.setFont(self.unitsFont)
+                pen.setColor(self.textColor)
+                p.setPen(pen)
+            p.drawText(top_rect, name_text, opt_left)
+            if units_text:
+                units_rect = QRectF(top_rect.left() + name_w, top_rect.top(), max(0, top_rect.width() - name_w), top_rect.height())
                 if self.units_font_ghost_mask:
                     alpha = self.textColor.alpha()
                     self.textColor.setAlpha(self.font_ghost_alpha)
                     pen.setColor(self.textColor)
                     p.setPen(pen)
-                    p.drawText(self.unitsTextRect, self.units_font_ghost_mask, opt)
+                    p.drawText(units_rect, self.units_font_ghost_mask, opt_left)
                     self.textColor.setAlpha(alpha)
                     pen.setColor(self.textColor)
                     p.setPen(pen)
-                p.drawText(self.unitsTextRect, self.units, opt)
+                p.drawText(units_rect, units_text, opt_left)
+        else:
+            if units_text:
+                opt_left = QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                if self.units_font_ghost_mask:
+                    alpha = self.textColor.alpha()
+                    self.textColor.setAlpha(self.font_ghost_alpha)
+                    pen.setColor(self.textColor)
+                    p.setPen(pen)
+                    p.drawText(top_rect, self.units_font_ghost_mask, opt_left)
+                    self.textColor.setAlpha(alpha)
+                    pen.setColor(self.textColor)
+                    p.setPen(pen)
+                p.drawText(top_rect, units_text, opt_left)
+        
+        # Draw value (inline, matching HorizontalBarImproved behavior)
+        if self.show_value:
+            if not self.value_on_bar_left:
+                p.setFont(self.bigFont)
+                opt_val = QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+                if self.font_ghost_mask:
+                    alpha = self.valueColor.alpha()
+                    self.valueColor.setAlpha(self.font_ghost_alpha)
+                    pen.setColor(self.valueColor)
+                    p.setPen(pen)
+                    p.drawText(self.valueTextRect, self.font_ghost_mask, opt_val)
+                    self.valueColor.setAlpha(alpha)
+                pen.setColor(self.valueColor)
+                p.setPen(pen)
+                p.drawText(self.valueTextRect, self.valueText, opt_val)
             else:
-                p.setFont(self.smallFont)
-                p.drawText(self.unitsTextRect, self.units, opt)
+                # Value on the left label area next to bar
+                label_text = self.valueText
+                left_font = self._font_fit(self.bigFont, label_text or "", self.barValueRect)
+                p.setFont(left_font)
+                pen.setColor(self.valueColor)
+                p.setPen(pen)
+                opt_left = QTextOption(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                p.drawText(self.barValueRect, label_text, opt_left)
 
-        # ===== SIMPLIFIED BAR DRAWING - SINGLE COLOR, NO BANDS =====
+        # Units already handled in top row combined rendering above
+
+        # ===== ZONE-BASED BAR DRAWING (value-dependent full-bar colors) =====
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.setPen(Qt.PenStyle.NoPen)
+
+        bar_left, bar_top, bar_width, bar_height = self.get_bar_geometry()
+
+        zone = self._current_zone()
+
+        # Helper for threshold->pixel using improved base's geometry helpers
+        def px(val):
+            try:
+                return int(self._calculateThresholdPixel(val)) if val is not None else None
+            except Exception:
+                return None
+
+        lowAlarmPx = px(self.lowAlarm) if getattr(self, 'lowAlarm', None) is not None else None
+        lowWarnPx = px(self.lowWarn) if getattr(self, 'lowWarn', None) is not None else None
+        highWarnPx = px(self.highWarn) if getattr(self, 'highWarn', None) is not None else None
+        highAlarmPx = px(self.highAlarm) if getattr(self, 'highAlarm', None) is not None else None
+
+        # For horizontal bars, full bar color means entire width region; special case high-warn band overlay
+        if zone in ('low_alarm', 'high_alarm'):
+            p.fillRect(bar_left, bar_top, bar_width, bar_height, self.alarmColor)
+        elif zone == 'low_warn':
+            p.fillRect(bar_left, bar_top, bar_width, bar_height, self.warnColor)
+        elif zone == 'safe':
+            p.fillRect(bar_left, bar_top, bar_width, bar_height, self.safeColor)
+        elif zone == 'high_warn':
+            # Base is green
+            p.fillRect(bar_left, bar_top, bar_width, bar_height, self.safeColor)
+            # Overlay yellow in the high-warn band from highWarn..highAlarm (if any), else highWarn..end
+            l_off = int(highWarnPx) if highWarnPx is not None else 0
+            r_off = bar_width  # always extend to end; do not show red when in high-warn zone
+            # Clamp to bar width and ensure l<=r
+            l_off = max(0, min(bar_width, l_off))
+            r_off = max(0, min(bar_width, r_off))
+            if r_off < l_off:
+                l_off, r_off = r_off, l_off
+            band_w = r_off - l_off
+            if band_w > 0:
+                p.fillRect(bar_left + l_off, bar_top, band_w, bar_height, self.warnColor)
         
-        # Get the color for the entire bar based on current value
-        barColor = self._getBarColor()
-        
-        # Draw background (empty portion) - dark gray
-        pen.setColor(QColor(40, 40, 40))
-        p.setPen(pen)
-        p.setBrush(QColor(40, 40, 40))
-        p.drawRect(QRectF(self.barLeft, self.barTop, self.barWidth, self.barHeight))
-        
-        # Calculate value position
-        valuePixel = self.barLeft + self.interpolate(self._value, self.barWidth)
-        valuePixel = max(self.barLeft, min(self.barRight, valuePixel))
-        
-        # Draw filled portion in the appropriate color
-        filledWidth = valuePixel - self.barLeft
-        if filledWidth > 0:
-            pen.setColor(barColor)
-            p.setPen(pen)
-            p.setBrush(barColor)
-            p.drawRect(QRectF(self.barLeft, self.barTop, filledWidth, self.barHeight))
-        
-        # Highlight ball
-        if self.highlight:
-            pen.setColor(Qt.GlobalColor.black)
-            pen.setWidth(1)
-            p.setPen(pen)
-            p.setBrush(self.highlightColor)
-            p.drawEllipse(self.ballCenter, self.ballRadius, self.ballRadius)
+        # No highlight ball for horizontal bar
 
         # Peak value line
-        if self.peakMode:
+        if self.peakMode and self.peakValue is not None:
             pen.setColor(QColor(Qt.GlobalColor.white))
             brush = QBrush(self.peakColor)
             pen.setWidth(1)
             p.setPen(pen)
             p.setBrush(brush)
-            x = self.barLeft + self.interpolate(self.peakValue, self.barWidth)
-            x = max(self.barLeft, min(self.barRight, x))
-            p.drawRect(qRound(x - 2), qRound(self.lineTop), qRound(4), qRound(self.lineHeight))
+            bar_left, bar_top, bar_width, bar_height = self.get_bar_geometry()
+            try:
+                px = int(self._calculateThresholdPixel(self.peakValue))
+            except Exception:
+                px = int(self.interpolate(self.peakValue, bar_width)) if bar_width > 0 else 0
+            px = max(0, min(bar_width, px))
+            x = bar_left + px
+            p.drawRect(qRound(x - 2), qRound(bar_top - 4), qRound(4), qRound(bar_height + 8))

@@ -348,7 +348,7 @@ class VerticalBarImproved(VerticalBarBase):
             else:
                 y = self.barTop + (self.barHeight - self.interpolate(self.peakValue, self.barHeight))
             y = max(self.barTop, min(self.barBottom, y))
-            #p.drawRect(qRound(lineLeft), qRound(y - 2), qRound(lineWidth), qRound(4))
+            p.drawRect(qRound(lineLeft), qRound(y - 2), qRound(lineWidth), qRound(4))
 
         # Indicator (filled bar effect or line)
         brush = QBrush(self.penColor)

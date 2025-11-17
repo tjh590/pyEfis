@@ -13,7 +13,6 @@ def app(qtbot):
     app = QApplication.instance()
     if app is None:
         app = QApplication([])
-    # Encourage deterministic rendering when running headless
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ.setdefault("QT_SCALE_FACTOR", "1")
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
@@ -35,7 +34,6 @@ def _render_widget_png(widget, w: int, h: int, out_path: str, qtbot):
 
 
 def _make_widget(class_path: str):
-    # class_path like "pyefis.instruments.gauges.VerticalBarSimple"
     mod_name, cls_name = class_path.rsplit('.', 1)
     mod = importlib.import_module(mod_name)
     cls = getattr(mod, cls_name)
@@ -48,12 +46,7 @@ def _apply_thresholds(widget, thresholds: Dict[str, Any]):
 
 
 @pytest.mark.screenshots
-def test_generate_bar_screenshots(qtbot, request):
-    """Generate a set of PNGs for bar gauges based on a YAML scenario file.
-
-    Set BARS_SCENARIOS_YAML to override the scenarios file path.
-    Files are written to extras/extras/test_results/<scenario-name>.png
-    """
+def test_generate_bar_screenshots(fix, qtbot, request):
     root = request.config.rootdir
     scenarios_path = os.getenv(
         "BARS_SCENARIOS_YAML",
@@ -67,14 +60,14 @@ def test_generate_bar_screenshots(qtbot, request):
     scenarios = data.get("scenarios", [])
 
     for sc in scenarios:
-        cls = sc.get("class", "pyefis.instruments.gauges.VerticalBarSimple")
-        name = sc.get("name", cls.split('.')[-1])
+        cls_path = sc.get("class", "pyefis.instruments.gauges.VerticalBarSimple")
+        name = sc.get("name", cls_path.split('.')[-1])
         w = int(sc.get("size", {}).get("w", 300))
         h = int(sc.get("size", {}).get("h", 200))
         thresholds = sc.get("thresholds", {})
         value = sc.get("value")
 
-        widget = _make_widget(cls)
+        widget = _make_widget(cls_path)
         widget.setDbkey("TEST")
         widget.setupGauge()
         _apply_thresholds(widget, thresholds)
@@ -82,4 +75,3 @@ def test_generate_bar_screenshots(qtbot, request):
             widget._value = value
         out_path = os.path.join(out_dir, f"{name}.png")
         _render_widget_png(widget, w, h, out_path, qtbot)
-        # No asserts; this test is for artifact generation only

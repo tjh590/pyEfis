@@ -312,6 +312,19 @@ class HorizontalBar(AbstractGauge):
                 seg_left = bar_left + (((segment + 1) * segment_size) + (segment * segment_gap))
                 p.drawRect(QRectF(seg_left, bar_top, segment_gap, bar_height))
 
+        # Peak indicator (match behavior with Improved/Simple)
+        if getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
+            try:
+                px = int(self._calculateThresholdPixel(self.peakValue))
+            except Exception:
+                px = int(self.interpolate(self.peakValue, bar_width)) if bar_width > 0 else 0
+            px = max(0, min(int(bar_width), int(px)))
+            x = int(bar_left + px)
+            pen.setColor(QColor(Qt.GlobalColor.white))
+            p.setPen(pen)
+            p.setBrush(self.peakColor)
+            p.drawRect(QRectF(x - 2, bar_top - 4, 4, bar_height + 8))
+
         # Indicator Line
         pen.setColor(QColor(Qt.GlobalColor.darkGray))
         brush = QBrush(self.penColor)

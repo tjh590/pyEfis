@@ -59,6 +59,89 @@ function renderPreferences(listEl, prefs) {
   });
 }
 
+function renderButtons(listEl, buttons) {
+  listEl.innerHTML = '';
+  (buttons || []).forEach(btn => {
+    const label = btn.label ? String(btn.label).replace(/\n/g,' ') : btn.id;
+    const li = el('li', `${label}`);
+    li.addEventListener('click', () => {
+      showButtonDetails(btn);
+    });
+    listEl.appendChild(li);
+  });
+}
+
+function showButtonDetails(btn) {
+  const title = `Button: ${btn.label || btn.id}`;
+  document.getElementById('detailsTitle').textContent = title;
+  // Build a readable multi-line summary
+  const lines = [];
+  lines.push(`id: ${btn.id}`);
+  if (btn.type) lines.push(`type: ${btn.type}`);
+  if (btn.dbkey) lines.push(`dbkey: ${btn.dbkey}`);
+  lines.push(`file: ${btn.file}`);
+  // Conditions block
+  const conds = btn.conditions || [];
+  if (conds.length === 0) {
+    lines.push('conditions: (none)');
+  } else {
+    lines.push(`conditions (${conds.length}):`);
+    conds.forEach((c, idx) => {
+      const symList = (c.symbols && c.symbols.length) ? c.symbols.join(', ') : '(no symbols)';
+      const acts = formatActions(c.actions);
+      lines.push(`  [${idx+1}] when: ${c.when || '(always)'}${c.continue ? ' (continue)' : ''}`);
+      lines.push(`       symbols: ${symList}`);
+      lines.push(`       actions: ${acts}`);
+    });
+  }
+  // Aggregated actions (unique)
+  // const agg = uniqueActions(btn.actions || []);
+  // lines.push(`all_actions (${agg.length} unique): ${agg.length ? formatActions(agg) : '(none)'}`);
+  // Provenance
+  if (btn.provenance) {
+    lines.push('provenance:');
+    Object.entries(btn.provenance).forEach(([k,v]) => {
+      if (v === undefined || v === null) return;
+      lines.push(`  ${k}: ${Array.isArray(v) ? (v.length ? v.join(' -> ') : '(empty)') : v}`);
+    });
+  }
+  document.getElementById('detailsJson').textContent = lines.join('\n');
+}
+
+function uniqueActions(actions) {
+  const seen = new Set();
+  const out = [];
+  for (const a of actions) {
+    const key = typeof a === 'object' && a ? JSON.stringify(a) : String(a);
+    if (!seen.has(key)) { seen.add(key); out.push(a); }
+  }
+  return out;
+}
+
+function formatActions(actions) {
+  if (!actions || actions.length === 0) return '(no actions)';
+  return actions.map(formatAction).join(', ');
+}
+
+function formatAction(a) {
+  if (a == null) return 'null';
+  if (typeof a === 'string') return a;
+  if (typeof a !== 'object') return String(a);
+  // Common action object patterns: {op: 'SET', path: 'X', value: 1}
+  const keys = Object.keys(a);
+  if (keys.length === 0) return '{}';
+  // Provide concise summary
+  const parts = [];
+  for (const k of keys) {
+    let v = a[k];
+    if (typeof v === 'object' && v !== null) {
+      v = JSON.stringify(v);
+    }
+    parts.push(`${k}=${v}`);
+  }
+  return `{${parts.join('; ')}}`;
+}
+
 function renderScreens(listEl, screens) {
   listEl.innerHTML = '';
   screens.forEach(s => {
@@ -77,6 +160,8 @@ function showDetails(title, obj) {
 let _currentGeometry = null;
 let _previewSVG = null;
 let _viewBox = null;
+let _applyViewBox = () => {};
+let _baseViewBox = null; // stores initial width/height to compute zoom factor
 
 function rebuildLabels() {
   if (!_previewSVG || !_currentGeometry) return;
@@ -84,13 +169,16 @@ function rebuildLabels() {
   [..._previewSVG.querySelectorAll('g')].forEach(g => g.remove());
   const labelsEnabled = document.getElementById('toggleLabels').checked;
   if (!labelsEnabled) return;
+  const svgRect = _previewSVG.getBoundingClientRect();
+  const zoomFactor = (_baseViewBox && _viewBox) ? (_baseViewBox.w / _viewBox.w) : 1;
   _currentGeometry.items.forEach((it, idx) => {
-    const full = (it.group ? `${it.group}: ` : '') + (it.type || `#${idx+1}`);
-    addLabelToSVG(it, full);
+    const base = it.label || it.type || `#${idx+1}`;
+    const full = (it.group ? `${it.group}: ` : '') + base;
+    addLabelToSVG(it, full, zoomFactor, svgRect);
   });
 }
 
-function addLabelToSVG(it, text) {
+function addLabelToSVG(it, text, zoomFactor=1, svgRect=null) {
   if (!_previewSVG) return;
   const padding = 2;
   const x = it.x + 1, y = it.y + 1, w = it.w - 2; // safe defaults
@@ -99,24 +187,38 @@ function addLabelToSVG(it, text) {
   bg.setAttribute('class', 'label-bg');
   const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
   t.setAttribute('class', 'label');
+  // Adaptive font size: base 10px scaled up slightly when zoomed
+  const fontSize = Math.min(16, 10 * Math.max(1, zoomFactor));
+  t.setAttribute('font-size', String(fontSize));
   t.setAttribute('x', String(x + padding));
-  t.setAttribute('y', String(y + 12));
+  t.setAttribute('y', String(y + fontSize + 2));
   t.textContent = text;
   g.appendChild(t);
   _previewSVG.appendChild(g); // attach to measure
+  // Pixel-based allowable width: map instrument logical width to current pixel width
+  let instrumentPixelWidth = w;
+  if (svgRect && _viewBox) {
+    instrumentPixelWidth = (w / _viewBox.w) * svgRect.width;
+  }
   let tw = t.getBBox().width + padding * 2;
-  if (tw > w && w > 20) {
+  if (tw > instrumentPixelWidth && instrumentPixelWidth > 25) {
     let s = text;
-    while (s.length > 3 && t.getComputedTextLength() > (w - padding * 2)) {
+    // Truncate proportionally instead of char-by-char for speed, then refine
+    const estRatio = instrumentPixelWidth / tw;
+    const targetLen = Math.max(3, Math.floor(s.length * estRatio) - 1);
+    s = s.slice(0, targetLen);
+    t.textContent = s + '…';
+    // Refine if still too wide
+    while (s.length > 3 && t.getComputedTextLength() > (instrumentPixelWidth - padding * 2)) {
       s = s.slice(0, -1);
       t.textContent = s + '…';
     }
-    tw = t.getBBox().width + padding * 2;
+    tw = Math.min(instrumentPixelWidth, t.getBBox().width + padding * 2);
   }
   bg.setAttribute('x', String(x));
   bg.setAttribute('y', String(y));
   bg.setAttribute('width', String(Math.min(w, tw)));
-  bg.setAttribute('height', String(14));
+  bg.setAttribute('height', String(fontSize + 4));
   g.insertBefore(bg, t);
   const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
   title.textContent = text;
@@ -133,11 +235,16 @@ function renderPreview(containerEl, geometry) {
   const W = geometry.width || 1200;
   const H = geometry.height || 800;
   _viewBox = { x: 0, y: 0, w: W, h: H };
+  _baseViewBox = { w: W, h: H };
   function applyViewBox() {
     if (_previewSVG) {
       _previewSVG.setAttribute('viewBox', `${_viewBox.x} ${_viewBox.y} ${_viewBox.w} ${_viewBox.h}`);
+      // Recompute labels so truncation reflects current zoom level
+      rebuildLabels();
     }
   }
+  // Update global applyViewBox so control handlers act on current SVG
+  _applyViewBox = applyViewBox;
   _previewSVG = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   _previewSVG.setAttribute('class', 'preview');
   applyViewBox();
@@ -164,39 +271,22 @@ function renderPreview(containerEl, geometry) {
     _previewSVG.appendChild(r);
   });
   containerEl.appendChild(_previewSVG);
+  // Interaction: wheel zoom & drag pan
+  attachPanZoom(_previewSVG);
   rebuildLabels();
-  wirePreviewControls(applyViewBox);
+  wirePreviewControls();
 }
 
-function wirePreviewControls(applyViewBox) {
+function wirePreviewControls() {
   const fitBtn = document.getElementById('fitBtn');
-  const zoomInBtn = document.getElementById('zoomInBtn');
-  const zoomOutBtn = document.getElementById('zoomOutBtn');
   const labelsToggle = document.getElementById('toggleLabels');
   if (fitBtn && !fitBtn._wired) {
     fitBtn._wired = true;
     fitBtn.addEventListener('click', () => {
       if (!_currentGeometry) return;
       _viewBox = { x: 0, y: 0, w: _currentGeometry.width || 1200, h: _currentGeometry.height || 800 };
-      applyViewBox();
+      _applyViewBox();
     });
-  }
-  function zoom(factor) {
-    if (!_viewBox) return;
-    const cx = _viewBox.x + _viewBox.w / 2;
-    const cy = _viewBox.y + _viewBox.h / 2;
-    const nw = _viewBox.w * factor;
-    const nh = _viewBox.h * factor;
-    _viewBox = { x: cx - nw / 2, y: cy - nh / 2, w: nw, h: nh };
-    applyViewBox();
-  }
-  if (zoomInBtn && !zoomInBtn._wired) {
-    zoomInBtn._wired = true;
-    zoomInBtn.addEventListener('click', () => zoom(0.8));
-  }
-  if (zoomOutBtn && !zoomOutBtn._wired) {
-    zoomOutBtn._wired = true;
-    zoomOutBtn.addEventListener('click', () => zoom(1.25));
   }
   if (labelsToggle && !labelsToggle._wired) {
     labelsToggle._wired = true;
@@ -233,6 +323,52 @@ function wirePreviewControls(applyViewBox) {
   }
 }
 
+function attachPanZoom(svg) {
+  if (!svg || svg._panZoomWired) return;
+  svg._panZoomWired = true;
+  let dragging = false;
+  let startX = 0, startY = 0, vbStart = null;
+  svg.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // left only
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    vbStart = { ..._viewBox };
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging || !vbStart) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    // Translate proportional to current viewBox scale vs element pixels
+    const rect = svg.getBoundingClientRect();
+    const scaleX = _viewBox.w / rect.width;
+    const scaleY = _viewBox.h / rect.height;
+    _viewBox.x = vbStart.x - dx * scaleX;
+    _viewBox.y = vbStart.y - dy * scaleY;
+    _applyViewBox();
+  });
+  window.addEventListener('mouseup', () => { dragging = false; });
+  svg.addEventListener('wheel', (e) => {
+    if (!_viewBox) return;
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const px = (e.clientX - rect.left) / rect.width; // 0..1
+    const py = (e.clientY - rect.top) / rect.height; // 0..1
+    const factor = e.deltaY < 0 ? 0.85 : 1.18; // zoom in vs out
+    const newW = _viewBox.w * factor;
+    const newH = _viewBox.h * factor;
+    // Keep point under cursor stable
+    const cx = _viewBox.x + _viewBox.w * px;
+    const cy = _viewBox.y + _viewBox.h * py;
+    _viewBox.x = cx - newW * px;
+    _viewBox.y = cy - newH * py;
+    _viewBox.w = newW;
+    _viewBox.h = newH;
+    _applyViewBox();
+  }, { passive: false });
+}
+
 function showScreen(s) {
   const title = `Screen: ${s.name}`;
   document.getElementById('detailsTitle').textContent = title;
@@ -245,24 +381,10 @@ function showScreen(s) {
 
 async function boot() {
   let data;
-  const pathInput = document.getElementById('jsonPath');
-  const loadBtn = document.getElementById('loadBtn');
   const fileInput = document.getElementById('fileInput');
-  async function doLoad() {
-    try {
-      data = await loadJSONViaUrl(pathInput.value.trim());
-      renderScreens(document.getElementById('screens'), data.screens || []);
-      renderIncludes(document.getElementById('includes'), data.includes || []);
-  renderPreferences(document.getElementById('preferences'), data.preferences || {});
-      showDetails('Meta', data.meta || {});
-    } catch (e) {
-      const hint = location.protocol === 'file:'
-        ? 'Hint: Browser blocked fetch over file://. Use the file picker or run a local server.'
-        : '';
-      showDetails('Error', { message: String(e), hint });
-    }
-  }
-  loadBtn.addEventListener('click', doLoad);
+  // Activate splitter and preview controls early (before a screen is clicked)
+  // Provide a no-op applyViewBox; real geometry wiring occurs on first renderPreview call.
+  wirePreviewControls();
   fileInput.addEventListener('change', async (ev) => {
     const f = ev.target.files && ev.target.files[0];
     if (!f) return;
@@ -271,12 +393,16 @@ async function boot() {
       renderScreens(document.getElementById('screens'), data.screens || []);
       renderIncludes(document.getElementById('includes'), data.includes || []);
   renderPreferences(document.getElementById('preferences'), data.preferences || {});
+  renderButtons(document.getElementById('buttons'), data.buttons || []);
       showDetails('Meta', data.meta || {});
     } catch (e) {
       showDetails('Error', { message: String(e) });
     }
   });
-  doLoad();
+  showDetails('Instructions', {
+    message: 'Use the file picker to open a normalized_config.json produced by config_normalizer.py',
+    tip: 'Run: python3 tools/config_normalizer.py --config config/default.yaml --out tools/cfg_explorer/normalized_config.json'
+  });
 }
 
 boot();

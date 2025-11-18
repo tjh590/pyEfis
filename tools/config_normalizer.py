@@ -259,6 +259,7 @@ class Normalizer:
                 }
             },
             'includes': [],
+            'buttons': [],
             'screens': [],
         }
 
@@ -486,6 +487,22 @@ class Normalizer:
 
             cur_dir = os.path.dirname(screen_file)
             items_in = expand_includes(items_in, cur_dir, [])
+            def _label_for(inst_type: str, inst_obj: Dict[str,Any]) -> Optional[str]:
+                try:
+                    t = (inst_type or '').lower()
+                    opts = (inst_obj or {}).get('options') or {}
+                    if 'value_text' in t:
+                        v = opts.get('dbkey')
+                        return str(v) if v is not None else None
+                    if 'static_text' in t:
+                        v = opts.get('text')
+                        return str(v) if v is not None else None
+                    if 'numeric_display' in t:
+                        v = opts.get('dbkey')
+                        return str(v) if v is not None else None
+                except Exception:
+                    return None
+                return None
             # Iterate original instruments to handle ganged
             for inst in items_in:
                 if not isinstance(inst, dict):
@@ -588,11 +605,26 @@ class Normalizer:
                                 gspec = self.preferences['gauges'].get(pref_child_key)
                                 if isinstance(gspec, dict) and gspec.get('type'):
                                     concrete_type = str(gspec.get('type')).strip()
+                            # Merge options (group common + child options) for labeling
+                            merged_opts = {}
+                            try:
+                                if isinstance(g.get('common_options'), dict):
+                                    merged_opts |= g.get('common_options')
+                                if isinstance(gi.get('options'), dict):
+                                    merged_opts |= gi.get('options')
+                            except Exception:
+                                pass
+                            gi_for_label = dict(gi)
+                            if merged_opts:
+                                gi_for_label = dict(gi_for_label)
+                                gi_for_label['options'] = merged_opts
+                            display_label = _label_for(concrete_type, gi_for_label)
                             items_out.append({
                                 'type': concrete_type,
                                 'family_type': base_child_type,
                                 'group': g.get('name'),
                                 'x': cx, 'y': cy, 'w': cw, 'h': ch,
+                                **({'label': display_label} if display_label else {}),
                                 'provenance': {
                                     'source_file': os.path.relpath(screen_file, self.base_dir),
                                     'include_chain': include_chain,
@@ -622,10 +654,12 @@ class Normalizer:
                         gspec = self.preferences['gauges'].get(pref_key)
                         if isinstance(gspec, dict) and gspec.get('type'):
                             concrete_type = str(gspec.get('type')).strip()
+                    display_label = _label_for(concrete_type, inst)
                     items_out.append({
                         'type': concrete_type,
                         'family_type': t,
                         'x': x, 'y': y, 'w': width, 'h': height,
+                        **({'label': display_label} if display_label else {}),
                         'provenance': {
                             'source_file': os.path.relpath(screen_file, self.base_dir),
                             'include_chain': include_chain,
@@ -661,6 +695,69 @@ class Normalizer:
                     count = len(items_list) - 1
                     for it in items_list:
                         it['duplicates'] = count
+
+        # Collect buttons from config/buttons
+        buttons_dir = os.path.join(self.base_dir, 'buttons')
+        def _extract_symbols(expr: str) -> List[str]:
+            if not isinstance(expr, str):
+                return []
+            # crude tokenizer: split by non-alnum underscores and filter uppercase tokens
+            import re
+            tokens = re.split(r"[^A-Za-z0-9_\.]+", expr)
+            syms = []
+            for t in tokens:
+                if not t:
+                    continue
+                # Skip operators/keywords
+                if t.lower() in ('and','or','not','eq','ne','lt','gt','le','ge','true','false','clicked','previous_condition'):
+                    continue
+                # Allow dotted annunciate style, capture before dot
+                base = t.split('.',1)[0]
+                if base and base.isupper():
+                    syms.append(base)
+            return sorted(list(dict.fromkeys(syms)))
+
+        if os.path.isdir(buttons_dir):
+            for name in sorted(os.listdir(buttons_dir)):
+                p = os.path.join(buttons_dir, name)
+                if os.path.isdir(p):
+                    continue
+                if not name.endswith('.yaml'):
+                    continue
+                try:
+                    with open(p, 'r', encoding='utf-8') as f:
+                        bdoc = yaml.safe_load(f) or {}
+                except Exception:
+                    continue
+                if not isinstance(bdoc, dict):
+                    continue
+                stem = os.path.splitext(name)[0]
+                label = bdoc.get('label') or bdoc.get('text') or stem
+                btn = {
+                    'id': stem,
+                    'file': os.path.relpath(p, self.base_dir),
+                    'type': bdoc.get('type'),
+                    'label': label,
+                    'dbkey': bdoc.get('dbkey'),
+                    'conditions': [],
+                    'actions': [],
+                    'provenance': {
+                        'source_file': os.path.relpath(p, self.base_dir),
+                        'include_chain': [],
+                    }
+                }
+                conds = bdoc.get('conditions') or []
+                for c in conds:
+                    when = (c or {}).get('when')
+                    actions = (c or {}).get('actions') or []
+                    btn['conditions'].append({
+                        'when': when,
+                        'symbols': _extract_symbols(when),
+                        'actions': actions,
+                        'continue': (c or {}).get('continue', False)
+                    })
+                    btn['actions'].extend(actions)
+                normalized['buttons'].append(btn)
 
         if os.path.isdir(screens_dir):
             for name in sorted(os.listdir(screens_dir)):

@@ -104,6 +104,7 @@ class Normalizer:
         self.nodes: List[Node] = []
         self.edges: List[Dict[str, Any]] = []
         self._id = 1
+        # includes_used maps resolved absolute include file path -> {logical, count, locations: [context strings]}
         self.includes_used: Dict[str, Dict[str, Any]] = {}
 
     def _next_id(self) -> NodeId:
@@ -162,8 +163,11 @@ class Normalizer:
                     inc_nodes = []
                     for inc in files:
                         logical, resolved = resolve_include(self.base_dir, cur_dir, inc, self.preferences)
-                        self.includes_used.setdefault(resolved, {'logical': logical, 'count': 0})
-                        self.includes_used[resolved]['count'] += 1
+                        rec = self.includes_used.setdefault(resolved, {'logical': logical, 'count': 0, 'locations': []})
+                        rec['count'] += 1
+                        # Record location context (current file and path chain)
+                        loc = f"{os.path.relpath(file_path, self.base_dir)}:{'/'.join(parent_path + ['include'])}" if parent_path else os.path.relpath(file_path, self.base_dir)
+                        rec['locations'].append(loc)
                         sub = self.walk_file(resolved, parent_path, breadcrumb + [f'include:{logical}'])
                         inc_nodes.append(sub)
                     out[k] = inc_nodes
@@ -179,8 +183,10 @@ class Normalizer:
                 for i, e in enumerate(value):
                     if isinstance(e, dict) and 'include' in e:
                         logical, resolved = resolve_include(self.base_dir, cur_dir, e['include'], self.preferences)
-                        self.includes_used.setdefault(resolved, {'logical': logical, 'count': 0})
-                        self.includes_used[resolved]['count'] += 1
+                        rec = self.includes_used.setdefault(resolved, {'logical': logical, 'count': 0, 'locations': []})
+                        rec['count'] += 1
+                        loc = f"{os.path.relpath(file_path, self.base_dir)}:{'/'.join(parent_path + [str(i), 'include'])}" if parent_path else f"{os.path.relpath(file_path, self.base_dir)}:{str(i)}"
+                        rec['locations'].append(loc)
                         sub = self.walk_file(resolved, parent_path, breadcrumb + [f'include:{logical}'])
                         items.append({'[include]': sub})
                     else:
@@ -239,15 +245,41 @@ class Normalizer:
                 'base_dir': self.base_dir,
                 'default': os.path.relpath(default_yaml, self.base_dir),
             },
-            'includes': [
-                {
-                    'file': os.path.relpath(path, self.base_dir),
-                    'logical': rec['logical'],
-                    'used': rec['count'],
-                } for path, rec in sorted(self.includes_used.items())
-            ],
+            'preferences': {
+                'raw': self.preferences,  # merged explicit YAML (preferences.yaml + .custom)
+                'implicit_defaults': {
+                    'type_ratios': {
+                        'vertical_bar': 0.35,
+                        'horizontal_bar': 2.0,
+                        'arc_gauge': 2.0,
+                        'airspeed': 1.0,
+                        'altimeter': 1.0,
+                        'horizontal_situation_indicator': 1.0
+                    }
+                }
+            },
+            'includes': [],
             'screens': [],
         }
+
+        # Populate includes array with content for non-screen YAMLs
+        for path, rec in sorted(self.includes_used.items()):
+            rel = os.path.relpath(path, self.base_dir)
+            is_screen = os.path.abspath(path).startswith(os.path.abspath(os.path.join(self.base_dir, 'screens')) + os.sep)
+            entry = {
+                'file': rel,
+                'logical': rec.get('logical'),
+                'used': rec.get('count', 0),
+                'locations': sorted(rec.get('locations', [])),
+                'is_screen': bool(is_screen),
+            }
+            if not is_screen:
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        entry['content'] = yaml.safe_load(f) or {}
+                except Exception:
+                    entry['content'] = None
+            normalized['includes'].append(entry)
 
         # Find candidate screen files from default.yaml's EMS/PFD/radio entries if present
         # Otherwise, allow user to pass a screen YAML directly with --screen

@@ -24,7 +24,37 @@ function renderIncludes(listEl, includes) {
   listEl.innerHTML = '';
   includes.forEach(inc => {
     const li = el('li', `${inc.file} (${inc.used}x)`);
-    li.addEventListener('click', () => showDetails('Include', inc));
+    li.addEventListener('click', () => {
+      if (inc && inc.content && !inc.is_screen) {
+        showDetails(`Include: ${inc.file}`, {
+          logical: inc.logical,
+          used: inc.used,
+          locations: inc.locations,
+          content: inc.content,
+        });
+      } else {
+        showDetails('Include', inc);
+      }
+    });
+    listEl.appendChild(li);
+  });
+}
+
+function renderPreferences(listEl, prefs) {
+  listEl.innerHTML = '';
+  if (!prefs) return;
+  // Show top-level keys from raw preferences
+  const raw = prefs.raw || {};
+  Object.keys(raw).sort().forEach(key => {
+    const li = el('li', key);
+    li.addEventListener('click', () => showDetails(`Preference: ${key}`, raw[key]));
+    listEl.appendChild(li);
+  });
+  // Separator for implicit defaults
+  const imp = prefs.implicit_defaults || {};
+  Object.keys(imp).forEach(group => {
+    const li = el('li', `[implicit] ${group}`);
+    li.addEventListener('click', () => showDetails(`Implicit defaults: ${group}`, imp[group]));
     listEl.appendChild(li);
   });
 }
@@ -223,6 +253,7 @@ async function boot() {
       data = await loadJSONViaUrl(pathInput.value.trim());
       renderScreens(document.getElementById('screens'), data.screens || []);
       renderIncludes(document.getElementById('includes'), data.includes || []);
+  renderPreferences(document.getElementById('preferences'), data.preferences || {});
       showDetails('Meta', data.meta || {});
     } catch (e) {
       const hint = location.protocol === 'file:'
@@ -239,6 +270,7 @@ async function boot() {
       data = await loadJSONFromFile(f);
       renderScreens(document.getElementById('screens'), data.screens || []);
       renderIncludes(document.getElementById('includes'), data.includes || []);
+  renderPreferences(document.getElementById('preferences'), data.preferences || {});
       showDetails('Meta', data.meta || {});
     } catch (e) {
       showDetails('Error', { message: String(e) });

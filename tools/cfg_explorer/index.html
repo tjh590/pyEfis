@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>pyEfis Config Explorer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>pyEfis Config Explorer</h1>
+      <div class="controls">
+        <label>JSON URL:
+          <input id="jsonPath" type="text" size="50" value="normalized_config.json" />
+        </label>
+        <button id="loadBtn">Load</button>
+        <span class="sep">or</span>
+        <label class="file-label">Open file:
+          <input id="fileInput" type="file" accept="application/json,.json" />
+        </label>
+      </div>
+    </header>
+    <main>
+      <aside>
+        <section>
+          <h2>Screens</h2>
+          <ul id="screens"></ul>
+        </section>
+        <section>
+          <h2>Includes</h2>
+          <ul id="includes"></ul>
+        </section>
+      </aside>
+      <section id="details">
+        <h2 id="detailsTitle">Details</h2>
+        <div id="previewControls" class="controls">
+          <button id="fitBtn">Fit</button>
+          <button id="zoomInBtn">+</button>
+          <button id="zoomOutBtn">-</button>
+          <label><input type="checkbox" id="toggleLabels" checked /> Labels</label>
+        </div>
+        <div id="previewDetailsWrapper">
+          <div id="previewPane">
+            <div id="preview"></div>
+          </div>
+          <div id="splitter" title="Drag to resize"></div>
+          <div id="detailsPane">
+            <pre id="detailsJson"></pre>
+          </div>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <small>
+        Tip: Loading via file:// may be blocked by the browser. If the URL load fails, either use the file picker above
+        or start a local server: <code>python3 -m http.server --directory tools/cfg_explorer 8181</code> and open
+        <code>http://localhost:8181/</code>.
+      </small>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

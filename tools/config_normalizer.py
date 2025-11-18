@@ -358,6 +358,7 @@ class Normalizer:
             items_in = (sbody or {}).get('instruments') or []
             W, H = float(preview_w), float(preview_h)
             items_out: List[Dict[str,Any]] = []
+            provenance_out: List[Dict[str,Any]] = []
             # Helpers: condition evaluation for 'disabled'
             def _has_defines() -> bool:
                 return bool(self.defines)
@@ -439,7 +440,7 @@ class Normalizer:
                     inst_cols = parent_cols
                 return (inst_rows, inst_cols)
 
-            def expand_includes(items: List[Dict[str,Any]], cur_dir: str) -> List[Dict[str,Any]]:
+            def expand_includes(items: List[Dict[str,Any]], cur_dir: str, chain: Optional[List[str]] = None) -> List[Dict[str,Any]]:
                 out: List[Dict[str,Any]] = []
                 for inst in items:
                     if not isinstance(inst, dict):
@@ -450,6 +451,7 @@ class Normalizer:
                         if _is_disabled(inst.get('disabled')):
                             continue
                         inc = t.split(',', 1)[1]
+                        new_chain = (chain or []) + [inc]
                         span = inst.get('span', {}) or {}
                         span_rows = float(span.get('rows', 0) or 0)
                         span_cols = float(span.get('columns', 0) or 0)
@@ -473,6 +475,8 @@ class Normalizer:
                                     ci2['span']['rows'] = float(ci2['span']['rows']) * row_p
                                 if 'columns' in ci2['span'] and ci2['span']['columns'] is not None:
                                     ci2['span']['columns'] = float(ci2['span']['columns']) * col_p
+                            # Stash include chain provenance at child level
+                            ci2['_include_chain'] = list(new_chain)
                             out.append(ci2)
                         # Recurse for nested includes within children
                         # Nested includes inside newly added children will be handled on next expansion pass
@@ -481,7 +485,7 @@ class Normalizer:
                 return out
 
             cur_dir = os.path.dirname(screen_file)
-            items_in = expand_includes(items_in, cur_dir)
+            items_in = expand_includes(items_in, cur_dir, [])
             # Iterate original instruments to handle ganged
             for inst in items_in:
                 if not isinstance(inst, dict):
@@ -538,6 +542,8 @@ class Normalizer:
                 if 'include,' in t:
                     # Should have been expanded above
                     continue
+                include_chain = inst.get('_include_chain') or []
+                pref_key = inst.get('preferences') if isinstance(inst.get('preferences'), str) else None
                 if 'ganged' in t:
                     gang_type = inst.get('gang_type','vertical')
                     groups = inst.get('groups') or []
@@ -575,10 +581,27 @@ class Normalizer:
                             if r:
                                 bw, bh, bx, by = bounding_box(cw, ch, cx, cy, r)
                                 cw, ch, cx, cy = bw, bh, bx, by
+                            # Preference override resolution
+                            pref_child_key = gi.get('preferences') if isinstance(gi.get('preferences'), str) else None
+                            concrete_type = base_child_type
+                            if pref_child_key and isinstance(self.preferences.get('gauges'), dict):
+                                gspec = self.preferences['gauges'].get(pref_child_key)
+                                if isinstance(gspec, dict) and gspec.get('type'):
+                                    concrete_type = str(gspec.get('type')).strip()
                             items_out.append({
-                                'type': base_child_type,
+                                'type': concrete_type,
+                                'family_type': base_child_type,
                                 'group': g.get('name'),
                                 'x': cx, 'y': cy, 'w': cw, 'h': ch,
+                                'provenance': {
+                                    'source_file': os.path.relpath(screen_file, self.base_dir),
+                                    'include_chain': include_chain,
+                                    'ganged_parent': t,
+                                    'parent_group': g.get('name'),
+                                    'preference_key': pref_child_key,
+                                    'family_type': base_child_type,
+                                    'concrete_type': concrete_type,
+                                }
                             })
                             if 'horizontal' in gang_type:
                                 group_x += group_width + hgap
@@ -593,7 +616,26 @@ class Normalizer:
                     if r:
                         bw, bh, bx, by = bounding_box(width, height, x, y, r)
                         width, height, x, y = bw, bh, bx, by
-                    items_out.append({'type': t, 'x': x, 'y': y, 'w': width, 'h': height})
+                    # For non-ganged instruments, also honor preference gauge type override
+                    concrete_type = t
+                    if pref_key and isinstance(self.preferences.get('gauges'), dict):
+                        gspec = self.preferences['gauges'].get(pref_key)
+                        if isinstance(gspec, dict) and gspec.get('type'):
+                            concrete_type = str(gspec.get('type')).strip()
+                    items_out.append({
+                        'type': concrete_type,
+                        'family_type': t,
+                        'x': x, 'y': y, 'w': width, 'h': height,
+                        'provenance': {
+                            'source_file': os.path.relpath(screen_file, self.base_dir),
+                            'include_chain': include_chain,
+                            'ganged_parent': None,
+                            'parent_group': None,
+                            'preference_key': pref_key,
+                            'family_type': t,
+                            'concrete_type': concrete_type,
+                        }
+                    })
             return {'width': int(W), 'height': int(H), 'items': items_out}
         
         def dedupe(items: List[Dict[str,Any]]) -> List[Dict[str,Any]]:

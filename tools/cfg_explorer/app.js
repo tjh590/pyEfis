@@ -401,7 +401,7 @@ async function boot() {
   });
   showDetails('Instructions', {
     message: 'Use the file picker to open a normalized_config.json produced by config_normalizer.py',
-    tip: 'Run: python3 tools/config_normalizer.py --config config/default.yaml --out tools/cfg_explorer/normalized_config.json'
+    tip: 'Run: python3 tools/config_normalizer.py --config config/default.yaml --out tools/cfg_explorer/normalized_config.json, see tools/cfg_explorer/README.md for --define options'
   });
 }
 

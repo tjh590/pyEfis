@@ -503,6 +503,68 @@ class Normalizer:
                 except Exception:
                     return None
                 return None
+
+            def _button_summary_from_options(opts: Dict[str,Any], cur_dir_local: str) -> Optional[str]:
+                try:
+                    if not isinstance(opts, dict):
+                        return None
+                    cfg = opts.get('config')
+                    if not cfg:
+                        return None
+                    # Resolve candidate paths: absolute, relative to current screen dir, relative to base config dir
+                    candidates = []
+                    if os.path.isabs(str(cfg)):
+                        candidates.append(str(cfg))
+                    candidates.append(os.path.normpath(os.path.join(cur_dir_local, str(cfg))))
+                    candidates.append(os.path.normpath(os.path.join(self.base_dir, str(cfg))))
+                    path = next((p for p in candidates if os.path.exists(p)), None)
+                    if not path:
+                        return None
+                    with open(path, 'r', encoding='utf-8') as f:
+                        bdoc = yaml.safe_load(f) or {}
+                    if not isinstance(bdoc, dict):
+                        return None
+                    stem = os.path.splitext(os.path.basename(path))[0]
+                    label_base = bdoc.get('label') or bdoc.get('text') or stem
+                    btype = bdoc.get('type')
+                    conds = bdoc.get('conditions') or []
+                    cond_count = len(conds)
+                    # Extract up to 3 symbols across all conditions
+                    import re
+                    def _extract_syms(expr: Any) -> List[str]:
+                        if not isinstance(expr, str):
+                            return []
+                        tokens = re.split(r"[^A-Za-z0-9_\.]+", expr)
+                        syms: List[str] = []
+                        for tkn in tokens:
+                            if not tkn:
+                                continue
+                            tl = tkn.lower()
+                            if tl in ('and','or','not','eq','ne','lt','gt','le','ge','true','false','clicked','previous_condition'):
+                                continue
+                            base = tkn.split('.',1)[0]
+                            if base and base.isupper():
+                                if base not in syms:
+                                    syms.append(base)
+                        return syms
+                    symbols: List[str] = []
+                    for c in conds:
+                        for s in _extract_syms((c or {}).get('when')):
+                            if s not in symbols:
+                                symbols.append(s)
+                    sym_part = ', '.join(symbols[:3])
+                    parts = []
+                    if btype:
+                        parts.append(f"[{btype}]")
+                    parts.append(str(label_base))
+                    if cond_count:
+                        parts.append(f"({cond_count})")
+                    summary = ' '.join(parts)
+                    if sym_part:
+                        summary = f"{summary} — {sym_part}"
+                    return summary
+                except Exception:
+                    return None
             # Iterate original instruments to handle ganged
             for inst in items_in:
                 if not isinstance(inst, dict):
@@ -619,6 +681,8 @@ class Normalizer:
                                 gi_for_label = dict(gi_for_label)
                                 gi_for_label['options'] = merged_opts
                             display_label = _label_for(concrete_type, gi_for_label)
+                            if not display_label and 'button' in str(concrete_type).lower():
+                                display_label = _button_summary_from_options(merged_opts or {}, cur_dir)
                             items_out.append({
                                 'type': concrete_type,
                                 'family_type': base_child_type,
@@ -655,6 +719,8 @@ class Normalizer:
                         if isinstance(gspec, dict) and gspec.get('type'):
                             concrete_type = str(gspec.get('type')).strip()
                     display_label = _label_for(concrete_type, inst)
+                    if not display_label and 'button' in str(concrete_type).lower():
+                        display_label = _button_summary_from_options(inst.get('options') or {}, cur_dir)
                     items_out.append({
                         'type': concrete_type,
                         'family_type': t,

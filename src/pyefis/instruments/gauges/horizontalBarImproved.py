@@ -26,6 +26,8 @@ class HorizontalBarImproved(HorizontalBar):
         # Provide a default peak color if not externally configured
         if not hasattr(self, 'peakColor'):
             self.peakColor = QColor(Qt.GlobalColor.magenta)
+        # Improved horizontal bar supports peak indicator drawing
+        self.supportsPeak = True
     
     def _calculateThresholdPixel(self, value):
         """Calculate pixel position for a threshold value with consistent rounding."""
@@ -172,9 +174,13 @@ class HorizontalBarImproved(HorizontalBar):
 
         # Peak indicator (draw before current value indicator so current value sits on top visually)
         try:
-            if getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
+            if getattr(self, 'supportsPeak', True) and getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
                 try:
-                    peak_px = int(self._calculateThresholdPixel(self.peakValue))
+                    peak_px = int(self.peakPixel())
+                    # If peakPixel produced a scaled value (0..1000) map to bar width
+                    if peak_px < 0 or peak_px > barWidth:
+                        rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange))) if self.highRange != self.lowRange else 0.0
+                        peak_px = int(rel * barWidth)
                 except Exception:
                     peak_px = int(self.interpolate(self.peakValue, barWidth)) if barWidth > 0 else 0
                 peak_px = max(0, min(int(barWidth), int(peak_px)))

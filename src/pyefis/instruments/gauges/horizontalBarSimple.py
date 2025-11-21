@@ -33,6 +33,8 @@ class HorizontalBarSimple(HorizontalBarBase):
         # Force segments to 0 to prevent any segment drawing
         self._segments_locked = True
         self.segments = 0
+        # Simple variant supports peak indicator
+        self.supportsPeak = True
     
     def __setattr__(self, name, value):
         # Prevent segments from being changed after initialization
@@ -192,7 +194,7 @@ class HorizontalBarSimple(HorizontalBarBase):
         # No highlight ball for horizontal bar
 
         # Peak value line
-        if self.peakMode and self.peakValue is not None:
+        if getattr(self, 'supportsPeak', True) and self.peakMode and self.peakValue is not None:
             pen.setColor(QColor(Qt.GlobalColor.white))
             brush = QBrush(self.peakColor)
             pen.setWidth(1)
@@ -200,7 +202,10 @@ class HorizontalBarSimple(HorizontalBarBase):
             p.setBrush(brush)
             bar_left, bar_top, bar_width, bar_height = self.get_bar_geometry()
             try:
-                px = int(self._calculateThresholdPixel(self.peakValue))
+                px = int(self.peakPixel())
+                if px < 0 or px > bar_width:
+                    rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange))) if self.highRange != self.lowRange else 0.0
+                    px = int(rel * bar_width)
             except Exception:
                 px = int(self.interpolate(self.peakValue, bar_width)) if bar_width > 0 else 0
             px = max(0, min(bar_width, px))

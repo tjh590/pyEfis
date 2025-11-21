@@ -54,6 +54,8 @@ class HorizontalBar(AbstractGauge):
             'font': None,
             'name_w': 0,
         }
+        # Base horizontal bar does not draw peak indicator (Improved/Simple variants do).
+        self.supportsPeak = False
     def getRatio(self):
         # Return X for 1:x specifying the ratio for this instrument
         return 2
@@ -312,8 +314,8 @@ class HorizontalBar(AbstractGauge):
                 seg_left = bar_left + (((segment + 1) * segment_size) + (segment * segment_gap))
                 p.drawRect(QRectF(seg_left, bar_top, segment_gap, bar_height))
 
-        # Peak indicator (match behavior with Improved/Simple)
-        if getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
+        # Peak indicator only when this variant supports peak drawing
+        if getattr(self, 'supportsPeak', False) and getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
             try:
                 px = int(self._calculateThresholdPixel(self.peakValue))
             except Exception:

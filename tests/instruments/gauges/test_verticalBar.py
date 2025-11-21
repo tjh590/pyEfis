@@ -72,15 +72,15 @@ def test_vertical_bar_gauge(fix,qtbot):
     widget.setNormalizeMode(False)
     assert widget._normalizeMode == False
     widget.setPeakMode(True)
-    assert widget._peakMode == True
+    assert widget.peakMode is True
     widget.setPeakMode(False)
-    assert widget._peakMode == False
+    assert widget.peakMode is False
     mode = widget._normalizeMode
     widget.setMode("normalize")
     assert widget.normalizeMode != mode
     widget.setMode("normalize")
     assert widget.normalizeMode == mode
-    mode = widget._peakMode
+    mode = widget.peakMode
     widget.setMode("peak")
     assert widget.peakMode != mode
     widget.setMode("peak")

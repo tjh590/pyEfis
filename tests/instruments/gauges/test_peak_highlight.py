@@ -17,11 +17,14 @@ def app(qtbot):
 
 # (class_attr, is_vertical, supports_peak, supports_highlight)
 GAUGE_MATRIX = [
+    # HorizontalBar base previously lacked peak line; after centralization keep supports_peak False
     ("HorizontalBar", False, False, False),
-    ("HorizontalBarImproved", False, False, False),
+    # Improved & Simple horizontal bars support peak marker
+    ("HorizontalBarImproved", False, True, False),
     ("HorizontalBarSimple", False, True, False),
+    # Vertical bars support peak & highlight
     ("VerticalBar", True, True, True),
-    ("VerticalBarImproved", True, True, True),  # peak line expected; highlight expected
+    ("VerticalBarImproved", True, True, True),
     ("VerticalBarSimple", True, True, True),
 ]
 

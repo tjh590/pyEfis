@@ -50,13 +50,15 @@ class AbstractGauge(QWidget):
         self._value = 0.0
         self._rawValue = 0.0
         self.peakValue = 0.0
+        # Unified peak mode flag (centralized – subclasses should not shadow)
+        self._peak_mode = False
         self._units = ""
         self.fail = False
         self.bad = False
         self.old = False
         self.annunciate = False
         self.highlight = False
-        self.peakMode = False
+        # peakMode property now proxies _peak_mode; do not assign separate boolean here
         self.__unitSwitching = False
         self.unitGroup = ""
 
@@ -152,6 +154,14 @@ class AbstractGauge(QWidget):
         self._repaint_timer.setSingleShot(True)
         self._repaint_timer.timeout.connect(self._on_repaint_timer)
 
+        # Peak indicator configuration (Phase 1 centralization)
+        self.peak_delta_threshold = 10.0        # minimum (peakValue - current) to show delta text if supported
+        self.peak_indicator_thickness = 4       # thickness (px) of peak marker rectangle
+        self.peak_indicator_extent = 4          # overshoot beyond bar (horizontal orientation) or half thickness (vertical)
+        # Allow color override by subclasses; if not set use magenta
+        if not hasattr(self, 'peakColor'):
+            self.peakColor = QColor(Qt.GlobalColor.magenta)
+
     # Internal: compute current throttle interval in ms
     def _repaint_interval_ms(self):
         try:
@@ -244,8 +254,8 @@ class AbstractGauge(QWidget):
                         pass
                 else:
                     self._schedule_update()
-        if self._value > self.peakValue:
-            self.peakValue = self._value
+        # Update peak candidate if peak mode enabled
+        self.updatePeakCandidate(self._value)
 
     value = property(getValue, setValue)
 
@@ -408,6 +418,22 @@ class AbstractGauge(QWidget):
                         setattr(self, attr, float(val))
             except Exception:
                 pass
+        # Peak-related dynamic preferences (optional bindings)
+        for attr in ("peak_delta_threshold","peak_indicator_thickness","peak_indicator_extent","supportsPeak"):
+            if hasattr(self, attr):
+                try:
+                    val = getattr(self, attr)
+                    if attr == "supportsPeak":
+                        setattr(self, attr, bool(val))
+                    else:
+                        # thickness/extent may be int; threshold may be float
+                        num = float(val)
+                        # Cast back to int for pixel dimensions
+                        if attr in ("peak_indicator_thickness","peak_indicator_extent"):
+                            num = int(round(num))
+                        setattr(self, attr, num)
+                except Exception:
+                    pass
 
 
     def setAuxData(self, auxdata):
@@ -484,9 +510,81 @@ class AbstractGauge(QWidget):
         self.setColors()
 
     def resetPeak(self):
-        self.peakValue = self.value
-        # Immediate feedback not required; schedule repaint
+        self.peakValue = float(self.value)
+        # Immediate redraw to move indicator
         self._schedule_update()
+
+    # ---- Centralized Peak API ----
+    def peakModeEnabled(self):
+        return bool(self._peak_mode)
+
+    def setPeakMode(self, enabled: bool):
+        was = self._peak_mode
+        self._peak_mode = bool(enabled)
+        if self._peak_mode and not was:
+            # On entry seed peak at current value
+            self.peakValue = float(self.value)
+        self._schedule_update()
+
+    # Backwards compatibility attribute access pattern used by existing code (peakMode boolean)
+    @property
+    def peakMode(self):
+        return self.peakModeEnabled()
+
+    @peakMode.setter
+    def peakMode(self, enabled):
+        self.setPeakMode(enabled)
+
+    def updatePeakCandidate(self, val):
+        """Record a new peak if peak mode is active.
+
+        Called from setValue after value change. Isolated for future decay/logic.
+        """
+        if self._peak_mode:
+            try:
+                fval = float(val)
+            except Exception:
+                return
+            if fval > float(self.peakValue):
+                self.peakValue = fval
+                # Schedule repaint (do not bypass throttle) when peak advances
+                self._schedule_update()
+
+    def shouldShowPeakDelta(self):
+        """Return True if delta text should be shown instead of normal value drawing.
+
+        Vertical bar subclasses currently implement this behavior; centralized logic allows
+        horizontal bars to opt-in later. Threshold configurable via peak_delta_threshold.
+        """
+        if not self._peak_mode:
+            return False
+        try:
+            delta = float(self.value) - float(self.peakValue)
+        except Exception:
+            return False
+        return delta <= -abs(float(self.peak_delta_threshold))
+
+    def peakPixel(self):
+        """Compute pixel position for peak value using subclass helpers where available.
+
+        Returns a raw pixel offset (orientation-specific interpretation done by subclass).
+        """
+        pv = self.peakValue
+        # Prefer subclass threshold pixel calculators when present
+        if hasattr(self, '_calculateThresholdPixel'):
+            try:
+                pos = self._calculateThresholdPixel(pv)
+                if pos is not None:
+                    return int(pos)
+            except Exception:
+                pass
+        # Fallback: interpolate over generic range to caller-provided dimension
+        # Subclass will finalize using its bar geometry.
+        try:
+            # Provide a neutral scalar (caller clamps). Without dimension context this is 0..barRange mapping.
+            return int(round(self.interpolate(pv, 1000)))  # arbitrary scale
+        except Exception:
+            return 0
 
     def setUnitSwitching(self):
         """When this function is called the unit switching features are used"""

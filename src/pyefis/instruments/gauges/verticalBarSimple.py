@@ -134,15 +134,12 @@ class VerticalBarSimple(VerticalBarBase):
 
             # Value
             if getattr(self, 'show_value', True):
-                if getattr(self, 'peakMode', False):
-                    dv = self.value - self.peakValue
-                    if dv <= -10:
-                        pen.setColor(self.peakColor)
-                        p.setFont(self.bigFont)
-                        p.setPen(pen)
-                        p.drawText(self.valueTextRect, str(round(dv)), QTextOption(Qt.AlignmentFlag.AlignCenter))
-                    else:
-                        self.drawValue(p, pen)
+                if self.shouldShowPeakDelta():
+                    delta = self.value - self.peakValue
+                    pen.setColor(self.peakColor)
+                    p.setFont(self.bigFont)
+                    p.setPen(pen)
+                    p.drawText(self.valueTextRect, str(round(delta)), QTextOption(Qt.AlignmentFlag.AlignCenter))
                 else:
                     self.drawValue(p, pen)
 
@@ -188,27 +185,27 @@ class VerticalBarSimple(VerticalBarBase):
             # Optional: peak value line
             try:
                 if getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
-                    # Compute y position for peak value
                     bar_top = int(getattr(self, 'barTop', bar_top))
                     bar_height = int(getattr(self, 'barHeight', bar_height))
                     bar_bottom = bar_top + bar_height
-                    if getattr(self, 'normalizeMode', False) and getattr(self, 'normalize_range', 0) > 0:
-                        nval = self.peakValue - self.normalizeReference
-                        start = bar_top + bar_height / 2
-                        y = start - (nval * bar_height / self.normalize_range)
-                    else:
-                        # Fallback to interpolate helper from base if available
-                        try:
+                    try:
+                        y = int(self.peakPixel())
+                        if y < bar_top or y > bar_bottom:
+                            rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange))) if self.highRange != self.lowRange else 0.0
+                            y = int(bar_top + (bar_height - (rel * bar_height)))
+                    except Exception:
+                        if getattr(self, 'normalizeMode', False) and getattr(self, 'normalize_range', 0) > 0:
+                            nval = self.peakValue - self.normalizeReference
+                            start = bar_top + bar_height / 2
+                            y = start - (nval * bar_height / self.normalize_range)
+                        else:
                             y = bar_top + (bar_height - self.interpolate(self.peakValue, bar_height))
-                        except Exception:
-                            y = bar_top
-                    # Clamp and draw small horizontal bar across the gauge bar area
                     y = max(bar_top, min(bar_bottom, int(y)))
                     bar_left = int(getattr(self, 'barLeft', bar_left))
                     bar_width = int(getattr(self, 'barWidth', bar_width))
                     p.setPen(QColor(Qt.GlobalColor.white))
                     p.setBrush(self.peakColor)
-                    p.drawRect(bar_left, y - 2, bar_width, 4)
+                    p.drawRect(bar_left, y - 2, bar_width, self.peak_indicator_thickness)
             except Exception:
                 pass
         finally:

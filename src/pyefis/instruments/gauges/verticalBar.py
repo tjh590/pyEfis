@@ -41,9 +41,9 @@ class VerticalBar(AbstractGauge):
         self.normalize_range = 0
         self.normalizeReference = 0
         self._normalizeMode = False
-        self.peakValue = 0.0
-        self._peakMode = False
-        self.peakColor = QColor(Qt.GlobalColor.magenta)
+        # Peak values now centralized in AbstractGauge; ensure color present
+        if not hasattr(self, 'peakColor'):
+            self.peakColor = QColor(Qt.GlobalColor.magenta)
         self._oldpencolor = self.pen_good_color
         self.segments = 0
         self.segment_gap_percent = 0.012
@@ -71,25 +71,12 @@ class VerticalBar(AbstractGauge):
 
     normalizeMode = property(getNormalizeMode, setNormalizeMode)
 
-    def getPeakMode(self):
-        return self._peakMode
-
-    def setPeakMode(self, x):
-        if x:
-            self._peakMode = True
-        else:
-            self._peakMode = False
-        self.update()
-
-    peakMode = property(getPeakMode, setPeakMode)
-
-
     def setMode(self, args):
         #print(f"Seting mode for {self._dbkey}")
         if args.lower() == "normalize":
                 self.normalizeMode = not self._normalizeMode
         elif args.lower() == "peak":
-                self.peakMode = not self._peakMode
+                self.peakMode = not self.peakMode
         elif args.lower() == "reset peak":
                 self.resetPeak()
         elif args.lower() == "lean":

@@ -23,6 +23,9 @@ class HorizontalBarImproved(HorizontalBar):
     
     def __init__(self, parent=None, min_size=True, font_family="DejaVu Sans Condensed"):
         super().__init__(parent, min_size, font_family)
+        # Provide a default peak color if not externally configured
+        if not hasattr(self, 'peakColor'):
+            self.peakColor = QColor(Qt.GlobalColor.magenta)
     
     def _calculateThresholdPixel(self, value):
         """Calculate pixel position for a threshold value with consistent rounding."""
@@ -166,6 +169,22 @@ class HorizontalBarImproved(HorizontalBar):
             for segment in range(self.segments - 1):
                 seg_left = int(((segment + 1) * segment_size) + (segment * segment_gap))
                 p.drawRect(bar_left + seg_left, barTop, int(segment_gap), barHeight)
+
+        # Peak indicator (draw before current value indicator so current value sits on top visually)
+        try:
+            if getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
+                try:
+                    peak_px = int(self._calculateThresholdPixel(self.peakValue))
+                except Exception:
+                    peak_px = int(self.interpolate(self.peakValue, barWidth)) if barWidth > 0 else 0
+                peak_px = max(0, min(int(barWidth), int(peak_px)))
+                peak_x = int(bar_left + peak_px)
+                pen.setColor(QColor(Qt.GlobalColor.white))
+                p.setPen(pen)
+                p.setBrush(self.peakColor)
+                p.drawRect(QRectF(peak_x - 2, barTop - 4, 4, barHeight + 8))
+        except Exception:
+            pass
 
         pen.setColor(QColor(Qt.GlobalColor.darkGray))
         brush = QBrush(self.penColor)

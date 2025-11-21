@@ -12,7 +12,7 @@
 #  GNU General Public License for more details.
 
 from PyQt6.QtGui import QPainter, QColor, QPaintEvent, QPen, QTextOption
-from PyQt6.QtCore import QRect, QPointF, Qt
+from PyQt6.QtCore import QRect, QRectF, QPointF, Qt
 from PyQt6.QtWidgets import QWidget
 
 from .verticalBarImproved import VerticalBarImproved as VerticalBarBase
@@ -183,30 +183,12 @@ class VerticalBarSimple(VerticalBarBase):
                 pass
 
             # Optional: peak value line
-            try:
-                if getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
-                    bar_top = int(getattr(self, 'barTop', bar_top))
-                    bar_height = int(getattr(self, 'barHeight', bar_height))
-                    bar_bottom = bar_top + bar_height
-                    try:
-                        y = int(self.peakPixel())
-                        if y < bar_top or y > bar_bottom:
-                            rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange))) if self.highRange != self.lowRange else 0.0
-                            y = int(bar_top + (bar_height - (rel * bar_height)))
-                    except Exception:
-                        if getattr(self, 'normalizeMode', False) and getattr(self, 'normalize_range', 0) > 0:
-                            nval = self.peakValue - self.normalizeReference
-                            start = bar_top + bar_height / 2
-                            y = start - (nval * bar_height / self.normalize_range)
-                        else:
-                            y = bar_top + (bar_height - self.interpolate(self.peakValue, bar_height))
-                    y = max(bar_top, min(bar_bottom, int(y)))
-                    bar_left = int(getattr(self, 'barLeft', bar_left))
-                    bar_width = int(getattr(self, 'barWidth', bar_width))
-                    p.setPen(QColor(Qt.GlobalColor.white))
-                    p.setBrush(self.peakColor)
-                    p.drawRect(bar_left, y - 2, bar_width, self.peak_indicator_thickness)
-            except Exception:
-                pass
+            if getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
+                bar_left_local = int(getattr(self, 'barLeft', bar_left))
+                bar_top_local = int(getattr(self, 'barTop', bar_top))
+                bar_width_local = int(getattr(self, 'barWidth', bar_width))
+                bar_height_local = int(getattr(self, 'barHeight', bar_height))
+                rect = QRectF(bar_left_local, bar_top_local, bar_width_local, bar_height_local)
+                self.drawPeakIndicator(p, 'vertical', rect)
         finally:
             p.end()

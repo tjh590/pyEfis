@@ -333,28 +333,8 @@ class VerticalBarImproved(VerticalBarBase):
 
         # Peak value line
         if self.peakMode:
-            pen.setColor(QColor(Qt.GlobalColor.white))
-            brush = QBrush(self.peakColor)
-            pen.setWidth(1)
-            p.setPen(pen)
-            p.setBrush(brush)
-            # Use centralized peak pixel logic; fall back to previous computation if needed
-            try:
-                y = int(self.peakPixel())
-                # If peakPixel returned a normalized scale (e.g., 0..1000) map to bar height
-                if y < self.barTop or y > self.barBottom:
-                    # Attempt normalized mapping when outside plausible range
-                    rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange))) if self.highRange != self.lowRange else 0.0
-                    y = int(self.barTop + (self.barHeight - (rel * self.barHeight)))
-            except Exception:
-                if self.normalizeMode and self.normalize_range > 0:
-                    nval = self.peakValue - self.normalizeReference
-                    start = self.barTop + self.barHeight / 2
-                    y = start - (nval * self.barHeight / self.normalize_range)
-                else:
-                    y = self.barTop + (self.barHeight - self.interpolate(self.peakValue, self.barHeight))
-            y = max(self.barTop, min(self.barBottom, y))
-            p.drawRect(qRound(lineLeft), qRound(y - 2), qRound(lineWidth), qRound(self.peak_indicator_thickness))
+            bar_rect = QRectF(lineLeft, self.barTop, lineWidth, self.barHeight)
+            self.drawPeakIndicator(p, 'vertical', bar_rect)
 
         # Indicator (filled bar effect or line)
         brush = QBrush(self.penColor)

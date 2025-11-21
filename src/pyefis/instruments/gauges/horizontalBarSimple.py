@@ -195,19 +195,5 @@ class HorizontalBarSimple(HorizontalBarBase):
 
         # Peak value line
         if getattr(self, 'supportsPeak', True) and self.peakMode and self.peakValue is not None:
-            pen.setColor(QColor(Qt.GlobalColor.white))
-            brush = QBrush(self.peakColor)
-            pen.setWidth(1)
-            p.setPen(pen)
-            p.setBrush(brush)
             bar_left, bar_top, bar_width, bar_height = self.get_bar_geometry()
-            try:
-                px = int(self.peakPixel())
-                if px < 0 or px > bar_width:
-                    rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange))) if self.highRange != self.lowRange else 0.0
-                    px = int(rel * bar_width)
-            except Exception:
-                px = int(self.interpolate(self.peakValue, bar_width)) if bar_width > 0 else 0
-            px = max(0, min(bar_width, px))
-            x = bar_left + px
-            p.drawRect(qRound(x - 2), qRound(bar_top - 4), qRound(4), qRound(bar_height + 8))
+            self.drawPeakIndicator(p, 'horizontal', QRectF(bar_left, bar_top, bar_width, bar_height))

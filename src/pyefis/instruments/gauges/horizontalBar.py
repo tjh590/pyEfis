@@ -54,8 +54,8 @@ class HorizontalBar(AbstractGauge):
             'font': None,
             'name_w': 0,
         }
-        # Base horizontal bar does not draw peak indicator (Improved/Simple variants do).
-        self.supportsPeak = False
+        # Base horizontal does draw peak indicator (Improved/Simple variants do).
+        self.supportsPeak = True
     def getRatio(self):
         # Return X for 1:x specifying the ratio for this instrument
         return 2
@@ -315,17 +315,8 @@ class HorizontalBar(AbstractGauge):
                 p.drawRect(QRectF(seg_left, bar_top, segment_gap, bar_height))
 
         # Peak indicator only when this variant supports peak drawing
-        if getattr(self, 'supportsPeak', False) and getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
-            try:
-                px = int(self._calculateThresholdPixel(self.peakValue))
-            except Exception:
-                px = int(self.interpolate(self.peakValue, bar_width)) if bar_width > 0 else 0
-            px = max(0, min(int(bar_width), int(px)))
-            x = int(bar_left + px)
-            pen.setColor(QColor(Qt.GlobalColor.white))
-            p.setPen(pen)
-            p.setBrush(self.peakColor)
-            p.drawRect(QRectF(x - 2, bar_top - 4, 4, bar_height + 8))
+        # Peak indicator (base variant disabled by supportsPeak=False but uses unified helper for consistency)
+        self.drawPeakIndicator(p, 'horizontal', QRectF(bar_left, bar_top, bar_width, bar_height))
 
         # Indicator Line
         pen.setColor(QColor(Qt.GlobalColor.darkGray))

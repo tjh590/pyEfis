@@ -173,24 +173,8 @@ class HorizontalBarImproved(HorizontalBar):
                 p.drawRect(bar_left + seg_left, barTop, int(segment_gap), barHeight)
 
         # Peak indicator (draw before current value indicator so current value sits on top visually)
-        try:
-            if getattr(self, 'supportsPeak', True) and getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
-                try:
-                    peak_px = int(self.peakPixel())
-                    # If peakPixel produced a scaled value (0..1000) map to bar width
-                    if peak_px < 0 or peak_px > barWidth:
-                        rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange))) if self.highRange != self.lowRange else 0.0
-                        peak_px = int(rel * barWidth)
-                except Exception:
-                    peak_px = int(self.interpolate(self.peakValue, barWidth)) if barWidth > 0 else 0
-                peak_px = max(0, min(int(barWidth), int(peak_px)))
-                peak_x = int(bar_left + peak_px)
-                pen.setColor(QColor(Qt.GlobalColor.white))
-                p.setPen(pen)
-                p.setBrush(self.peakColor)
-                p.drawRect(QRectF(peak_x - 2, barTop - 4, 4, barHeight + 8))
-        except Exception:
-            pass
+        if getattr(self, 'supportsPeak', True) and getattr(self, 'peakMode', False) and getattr(self, 'peakValue', None) is not None:
+            self.drawPeakIndicator(p, 'horizontal', QRectF(bar_left, barTop, barWidth, barHeight))
 
         pen.setColor(QColor(Qt.GlobalColor.darkGray))
         brush = QBrush(self.penColor)

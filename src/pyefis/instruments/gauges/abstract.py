@@ -586,6 +586,69 @@ class AbstractGauge(QWidget):
         except Exception:
             return 0
 
+    def drawPeakIndicator(self, painter: QPainter, orientation: str, bar_rect: QRectF):
+        """Unified peak marker drawing.
+
+        Parameters
+        ----------
+        painter : QPainter (already active)
+        orientation : 'vertical' or 'horizontal'
+        bar_rect : QRectF defining drawable bar region (left, top, width, height)
+
+        Behavior
+        --------
+        - Honors supportsPeak flag if present.
+        - Clamps marker position to bar bounds.
+        - Uses peak_indicator_thickness for marker size.
+        - Falls back gracefully if peakPixel returns out-of-range value.
+        """
+        if not getattr(self, 'peakMode', False):
+            return
+        if hasattr(self, 'supportsPeak') and not getattr(self, 'supportsPeak'):
+            return
+        if getattr(self, 'peakValue', None) is None:
+            return
+        try:
+            pen = QPen(QColor(Qt.GlobalColor.white))
+            pen.setWidth(1)
+            painter.setPen(pen)
+            painter.setBrush(self.peakColor)
+            thickness = max(1, int(getattr(self, 'peak_indicator_thickness', 4)))
+            # Extract geometry
+            left = int(bar_rect.left())
+            top = int(bar_rect.top())
+            width = int(bar_rect.width())
+            height = int(bar_rect.height())
+            if width <= 0 or height <= 0:
+                return
+            # Compute raw peak pixel
+            raw = int(self.peakPixel())
+            if orientation == 'vertical':
+                # raw expected to be absolute y in widget space if subclass provided _calculateThresholdPixel
+                # When raw outside range, map using normalized interpolation
+                if raw < top or raw > top + height:
+                    # Attempt normalized mapping
+                    rel = 0.0
+                    if self.highRange != self.lowRange:
+                        rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange)))
+                    # rel=0 => lowRange; vertical bars grow upward so invert for y from top
+                    raw = int(top + (height - (rel * height)))
+                y = max(top, min(top + height, raw))
+                painter.drawRect(left, y - thickness // 2, width, thickness)
+            else:  # horizontal
+                # raw is from left; clamp and map if out-of-range
+                if raw < 0 or raw > width:
+                    rel = 0.0
+                    if self.highRange != self.lowRange:
+                        rel = max(0.0, min(1.0, (self.peakValue - self.lowRange) / (self.highRange - self.lowRange)))
+                    raw = int(rel * width)
+                x = max(0, min(width, raw)) + left
+                extent = max(0, int(getattr(self, 'peak_indicator_extent', 4)))
+                painter.drawRect(QRectF(x - thickness // 2, top - extent, thickness, height + (extent * 2)))
+        except Exception:
+            # Silent fail to avoid breaking gauges if unexpected error occurs
+            pass
+
     def setUnitSwitching(self):
         """When this function is called the unit switching features are used"""
         self.__currentUnits = 1

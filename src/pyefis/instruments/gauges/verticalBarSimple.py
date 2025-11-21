@@ -21,11 +21,17 @@ from .verticalBarImproved import VerticalBarImproved as VerticalBarBase
 class VerticalBarSimple(VerticalBarBase):
     """Minimal simplified vertical bar.
 
-    Full-bar color based on current value zone:
-      low_alarm / high_alarm -> alarmColor (red)
-      low_warn -> warnColor (yellow)
-      safe -> safeColor (green)
-      high_warn -> safe base + warn overlay band between highWarn..highAlarm (or proportional top band if no highAlarm)
+    New behavior (truncated bar fill): only the portion of the bar from the
+    bottom up to the current value is filled, using a color determined by the
+    zone thresholds. The area above the current value remains background.
+
+    Zones (see `_current_zone`):
+      - low_alarm / high_alarm: filled region (value height) = `alarmColor` (red)
+      - low_warn: filled region = `warnColor` (yellow)
+      - safe: filled region = `safeColor` (green)
+      - high_warn: base of filled region up to `highWarn` = `safeColor`, and
+        the segment from `highWarn` to current value = `warnColor`.
+
     """
 
     def __init__(self, parent=None, min_size=True, font_family="DejaVu Sans Condensed"):
@@ -52,117 +58,114 @@ class VerticalBarSimple(VerticalBarBase):
         except Exception:
             pass
 
-        # zone determination
+        # zone determination & geometry
         zone = self._current_zone()
         p = QPainter(self)
         try:
-            # Ensure geometry reflects late-applied flags and current size
-            try:
-                self._recompute_geometry()
-            except Exception:
-                pass
-            # Background fill according to zone (fill entire widget to ensure sampling hits zone color)
-            # Compute bar geometry from base class for overlays
             bar_left = int(getattr(self, 'barLeft', 0))
             bar_top = int(getattr(self, 'barTop', 0))
             bar_width = int(getattr(self, 'barWidth', self.width()))
             bar_height = int(getattr(self, 'barHeight', self.height()))
+            bar_bottom = bar_top + bar_height
 
-            # No outline for fills to avoid border artifacts
             p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             p.setPen(Qt.PenStyle.NoPen)
 
-            if zone in ('low_alarm', 'high_alarm'):
-                base_color = self.alarmColor
-            elif zone == 'low_warn':
-                base_color = self.warnColor
-            else:
-                base_color = self.safeColor
-            # Fill full widget background to satisfy centerline sampling at any Y
-            p.fillRect(QRect(0, 0, self.width(), self.height()), base_color)
+            # Clear bar area background
+            p.fillRect(QRect(bar_left, bar_top, bar_width, bar_height), self.bgColor)
 
-            # ----- Draw name/value/units text, clipped to avoid sampling stripe -----
-            # We exclude a thin centerline strip from text painting so test sampling at
-            # x = width//2 sees only the zone color, while users still see full text.
-            from PyQt6.QtGui import QRegion
-            p.save()
+            # Compute filled height based on current value
             try:
-                full_region = QRegion(0, 0, self.width(), self.height())
-                cx = int(self.width() // 2)
-                strip_w = 3  # keep narrow for minimal visual impact
-                strip_left = max(0, cx - (strip_w // 2))
-                center_strip = QRegion(strip_left, 0, min(strip_w, max(1, self.width() - strip_left)), self.height())
-                p.setClipRegion(full_region.subtracted(center_strip))
+                value_height = int(round(self.interpolate(self.value, bar_height)))
+            except Exception:
+                value_height = 0
+            if value_height < 0:
+                value_height = 0
+            if value_height > bar_height:
+                value_height = bar_height
 
-                pen = QPen()
-                pen.setWidth(1)
-                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            if value_height > 0:
+                if zone in ('low_alarm', 'high_alarm'):
+                    # Entire filled region alarm color
+                    p.fillRect(QRect(bar_left, bar_bottom - value_height, bar_width, value_height), self.alarmColor)
+                elif zone == 'low_warn':
+                    p.fillRect(QRect(bar_left, bar_bottom - value_height, bar_width, value_height), self.warnColor)
+                elif zone == 'safe':
+                    p.fillRect(QRect(bar_left, bar_bottom - value_height, bar_width, value_height), self.safeColor)
+                elif zone == 'high_warn':
+                    # Base safe segment up to highWarn, then warn segment for remainder
+                    if self.highWarn is not None:
+                        try:
+                            hw_height = int(round(self.interpolate(self.highWarn, bar_height)))
+                        except Exception:
+                            hw_height = value_height  # fallback
+                        hw_height = max(0, min(hw_height, value_height))
+                        # Safe portion
+                        if hw_height > 0:
+                            p.fillRect(QRect(bar_left, bar_bottom - hw_height, bar_width, hw_height), self.safeColor)
+                        # Warn portion
+                        warn_height = value_height - hw_height
+                        if warn_height > 0:
+                            p.fillRect(QRect(bar_left, bar_bottom - value_height, bar_width, warn_height), self.warnColor)
+                    else:
+                        # No highWarn threshold defined; treat entire region as warn
+                        p.fillRect(QRect(bar_left, bar_bottom - value_height, bar_width, value_height), self.warnColor)
 
-                # Name (top)
-                opt = QTextOption(Qt.AlignmentFlag.AlignCenter)
-                if getattr(self, 'show_name', True):
-                    if getattr(self, 'name_font_ghost_mask', None):
-                        opt = QTextOption(Qt.AlignmentFlag.AlignLeft)
+            # ----- Text and value rendering aligned with Improved -----
+            pen = QPen()
+            pen.setWidth(1)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            # Name
+            opt = QTextOption(Qt.AlignmentFlag.AlignCenter)
+            if getattr(self, 'show_name', True):
+                if getattr(self, 'name_font_ghost_mask', None):
+                    opt = QTextOption(Qt.AlignmentFlag.AlignLeft)
+                    alpha = self.textColor.alpha()
+                    self.textColor.setAlpha(self.font_ghost_alpha)
+                    pen.setColor(self.textColor)
+                    p.setPen(pen)
+                    p.setFont(self.smallFont)
+                    p.drawText(self.nameTextRect, self.name_font_ghost_mask, opt)
+                    self.textColor.setAlpha(alpha)
+                pen.setColor(self.textColor)
+                p.setPen(pen)
+                p.setFont(self.smallFont)
+                p.drawText(self.nameTextRect, self.name, opt)
+
+            # Value
+            if getattr(self, 'show_value', True):
+                if getattr(self, 'peakMode', False):
+                    dv = self.value - self.peakValue
+                    if dv <= -10:
+                        pen.setColor(self.peakColor)
+                        p.setFont(self.bigFont)
+                        p.setPen(pen)
+                        p.drawText(self.valueTextRect, str(round(dv)), QTextOption(Qt.AlignmentFlag.AlignCenter))
+                    else:
+                        self.drawValue(p, pen)
+                else:
+                    self.drawValue(p, pen)
+
+            # Units
+            pen.setColor(self.textColor)
+            p.setPen(pen)
+            if getattr(self, 'show_units', True):
+                if getattr(self, 'units_font_mask', None):
+                    opt = QTextOption(Qt.AlignmentFlag.AlignRight)
+                    p.setFont(self.unitsFont)
+                    if getattr(self, 'units_font_ghost_mask', None):
                         alpha = self.textColor.alpha()
                         self.textColor.setAlpha(self.font_ghost_alpha)
                         pen.setColor(self.textColor)
                         p.setPen(pen)
-                        p.setFont(self.smallFont)
-                        p.drawText(self.nameTextRect, self.name_font_ghost_mask, opt)
+                        p.drawText(self.unitsTextRect, self.units_font_ghost_mask, opt)
                         self.textColor.setAlpha(alpha)
-                    pen.setColor(self.textColor)
-                    p.setPen(pen)
+                        pen.setColor(self.textColor)
+                        p.setPen(pen)
+                    p.drawText(self.unitsTextRect, self.units, opt)
+                else:
                     p.setFont(self.smallFont)
-                    p.drawText(self.nameTextRect, self.name, opt)
-
-                # Value (bottom area)
-                if getattr(self, 'show_value', True):
-                    if getattr(self, 'peakMode', False):
-                        dv = self.value - self.peakValue
-                        if dv <= -10:
-                            pen.setColor(self.peakColor)
-                            p.setFont(self.bigFont)
-                            p.setPen(pen)
-                            p.drawText(self.valueTextRect, str(round(dv)), QTextOption(Qt.AlignmentFlag.AlignCenter))
-                        else:
-                            self.drawValue(p, pen)
-                    else:
-                        self.drawValue(p, pen)
-
-                # Units (very bottom)
-                pen.setColor(self.textColor)
-                p.setPen(pen)
-                if getattr(self, 'show_units', True):
-                    if getattr(self, 'units_font_mask', None):
-                        opt = QTextOption(Qt.AlignmentFlag.AlignRight)
-                        p.setFont(self.unitsFont)
-                        if getattr(self, 'units_font_ghost_mask', None):
-                            alpha = self.textColor.alpha()
-                            self.textColor.setAlpha(self.font_ghost_alpha)
-                            pen.setColor(self.textColor)
-                            p.setPen(pen)
-                            p.drawText(self.unitsTextRect, self.units_font_ghost_mask, opt)
-                            self.textColor.setAlpha(alpha)
-                            pen.setColor(self.textColor)
-                            p.setPen(pen)
-                        p.drawText(self.unitsTextRect, self.units, opt)
-                    else:
-                        p.setFont(self.smallFont)
-                        p.drawText(self.unitsTextRect, self.units, QTextOption(Qt.AlignmentFlag.AlignCenter))
-            finally:
-                p.restore()
-
-            if zone == 'high_warn':
-                # Overlay warn from top of widget down to the highWarn pixel position.
-                # This ensures at least the top sample(s) detect warn color, while leaving
-                # lower samples safe, matching test expectations.
-                if self.highRange != self.lowRange and self.highWarn is not None:
-                    # Map highWarn to absolute pixel from top within the bar
-                    hw_pix = self._calculateThresholdPixel(self.highWarn)
-                    if hw_pix is not None:
-                        y_top = max(0, int(hw_pix))
-                        if y_top > 0:
-                            p.fillRect(QRect(0, 0, self.width(), y_top), self.warnColor)
+                    p.drawText(self.unitsTextRect, self.units, QTextOption(Qt.AlignmentFlag.AlignCenter))
 
             # (Value text already rendered above for consistency)
 
